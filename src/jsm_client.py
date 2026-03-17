@@ -1,0 +1,222 @@
+"""
+Async Atlassian JSM Ops API client.
+
+Handles schedule discovery and on-call participant lookups with two layers of
+caching so we don't hammer the API on every webhook hit:
+
+  1. Schedule name → ID cache (never expires; IDs don't change)
+  2. On-call status cache (expires after oncall_cache_ttl_seconds, default 5 min)
+
+On any API error the on-call check returns True (fail-open) so you don't
+miss an alert because the API was temporarily unavailable.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# How long to wait for JSM API calls before giving up.
+_REQUEST_TIMEOUT = 10.0
+
+
+class JSMClient:
+    def __init__(
+        self,
+        api_url: str,
+        cloud_id: str,
+        username: str,
+        api_token: str,
+        my_user_id: str,
+        jira_base_url: str = "",  # reserved for future use; not currently needed
+    ) -> None:
+        self.api_url = api_url.rstrip("/")
+        self.cloud_id = cloud_id
+        self._auth = (username, api_token)
+        self.my_user_id = my_user_id
+
+        # name → schedule_id  (populated lazily, never invalidated)
+        self._schedule_id_cache: Dict[str, str] = {}
+        # schedule_id → (is_on_call, fetched_at_timestamp)
+        self._oncall_cache: Dict[str, Tuple[bool, float]] = {}
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _base_headers(self) -> Dict[str, str]:
+        return {"Accept": "application/json"}
+
+    def _schedules_url(self) -> str:
+        return f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/schedules"
+
+    def _oncall_url(self, schedule_id: str) -> str:
+        return f"{self._schedules_url()}/{schedule_id}/on-calls"
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    async def get_all_schedules(self) -> List[Dict[str, Any]]:
+        """
+        Return all schedules visible to the configured API token.
+        Handles JSM's cursor-based pagination automatically.
+        """
+        url: Optional[str] = self._schedules_url()
+        schedules: List[Dict[str, Any]] = []
+
+        async with httpx.AsyncClient(trust_env=False) as client:
+            while url:
+                response = await client.get(
+                    url,
+                    auth=self._auth,
+                    headers=self._base_headers(),
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                page = data.get("values") or []
+                schedules.extend(page)
+
+                # JSM paginates via a "next" cursor parameter
+                next_cursor = data.get("paging", {}).get("next")
+                url = next_cursor if next_cursor else None
+
+        logger.debug("Fetched %d schedules from JSM", len(schedules))
+        return schedules
+
+    async def get_schedule_id(self, schedule_name: str) -> Optional[str]:
+        """
+        Return the schedule ID for *schedule_name*, refreshing the local
+        name→ID cache from the API if the name is not yet known.
+        """
+        if schedule_name in self._schedule_id_cache:
+            return self._schedule_id_cache[schedule_name]
+
+        try:
+            schedules = await self.get_all_schedules()
+        except Exception as exc:
+            logger.error("Failed to fetch schedules from JSM: %s", exc)
+            return None
+
+        for s in schedules:
+            sid = s.get("id")
+            sname = s.get("name")
+            if sid and sname:
+                self._schedule_id_cache[sname] = sid
+                logger.debug("Cached schedule '%s' → %s", sname, sid)
+
+        found = self._schedule_id_cache.get(schedule_name)
+        if not found:
+            logger.warning(
+                "Schedule '%s' not found in JSM. "
+                "Available schedules: %s",
+                schedule_name,
+                list(self._schedule_id_cache.keys()),
+            )
+        return found
+
+    async def is_on_call(
+        self,
+        schedule_id: str,
+        cache_ttl: int = 300,
+    ) -> bool:
+        """
+        Return True if *my_user_id* is currently on-call for *schedule_id*.
+
+        Results are cached for *cache_ttl* seconds.  On any API error, returns
+        True (fail-open) so critical alerts are never silently dropped.
+        """
+        now = time.monotonic()
+
+        cached = self._oncall_cache.get(schedule_id)
+        if cached is not None:
+            is_on_call, fetched_at = cached
+            if now - fetched_at < cache_ttl:
+                logger.debug(
+                    "On-call cache hit for %s: %s", schedule_id, is_on_call
+                )
+                return is_on_call
+
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.get(
+                    self._oncall_url(schedule_id),
+                    auth=self._auth,
+                    headers=self._base_headers(),
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            participants = data.get("onCallParticipants") or []
+            is_on_call = any(
+                p.get("id") == self.my_user_id for p in participants
+            )
+            self._oncall_cache[schedule_id] = (is_on_call, now)
+            logger.info(
+                "On-call status for schedule %s: %s (participants: %s)",
+                schedule_id,
+                is_on_call,
+                [p.get("name", p.get("id")) for p in participants],
+            )
+            return is_on_call
+
+        except Exception as exc:
+            logger.error(
+                "Could not check on-call status for schedule %s: %s — "
+                "defaulting to notify (fail-open)",
+                schedule_id,
+                exc,
+            )
+            # Fail-open: better to over-notify than to miss a P1.
+            return True
+
+    async def verify_credentials(self) -> tuple[bool, str]:
+        """
+        Validate the configured API token against the JSM Ops schedules endpoint.
+
+        This is the same endpoint used for normal schedule lookups, so if it
+        returns 200 we know the token has exactly the permissions this service
+        needs.  Using the JSM Ops API (api.atlassian.com) rather than the Jira
+        REST API (atlassian.net) avoids SSO / IP-restriction issues that can
+        block basic-auth on the Jira product tier even when the token itself is
+        valid.
+
+        Returns (True, "") on success, or (False, error_detail) on failure.
+        """
+        url = self._schedules_url()
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.get(
+                    url,
+                    auth=self._auth,
+                    headers=self._base_headers(),
+                    timeout=_REQUEST_TIMEOUT,
+                )
+            if response.status_code == 401:
+                return False, "401 Unauthorized — token is invalid or has been revoked"
+            if response.status_code == 403:
+                return False, "403 Forbidden — token lacks required permissions"
+            response.raise_for_status()
+            schedule_count = len(response.json().get("values") or [])
+            logger.info(
+                "Credential check OK — JSM API reachable (%d schedule(s) visible)",
+                schedule_count,
+            )
+            return True, ""
+        except httpx.HTTPStatusError as exc:
+            msg = f"HTTP {exc.response.status_code} from JSM schedules API"
+            logger.error("Credential check failed: %s", msg)
+            return False, msg
+        except Exception as exc:
+            msg = f"Connection error: {exc}"
+            logger.error("Credential check failed: %s", msg)
+            return False, msg
+
+    def invalidate_oncall_cache(self) -> None:
+        """Force the next on-call check to hit the API (useful after rotation)."""
+        self._oncall_cache.clear()
+        logger.info("On-call cache invalidated")

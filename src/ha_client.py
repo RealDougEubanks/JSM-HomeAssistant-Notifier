@@ -1,0 +1,305 @@
+"""
+Async Home Assistant REST API client.
+
+Responsibilities:
+  1. Build a natural-language TTS announcement from alert data, including
+     priority, title, entity, and a truncated description.
+  2. Call media_player.play_media with rich metadata so HA shows the real
+     alert title instead of "Playing Default Media Receiver".
+  3. Create/update a persistent_notification so the alert is visible in the
+     HA dashboard even after the audio plays.
+
+All calls are fire-and-forget safe — errors are logged but do not raise, so
+a transient HA outage cannot break the webhook handler.
+"""
+
+from __future__ import annotations
+
+import logging
+import urllib.parse
+from typing import Any, Dict, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+_REQUEST_TIMEOUT = 10.0
+
+# Priority → (spoken label, emoji)
+_PRIORITY_META: Dict[str, tuple[str, str]] = {
+    "P1": ("Priority 1, Critical",   "🔴"),
+    "P2": ("Priority 2, High",       "🟠"),
+    "P3": ("Priority 3, Medium",     "🟡"),
+    "P4": ("Priority 4, Low",        "🟢"),
+    "P5": ("Priority 5, Information","⚪"),
+}
+
+# Maximum characters kept from the description inside a TTS message.
+_DESC_MAX_CHARS = 200
+
+
+class HAClient:
+    def __init__(
+        self,
+        ha_url: str,
+        ha_token: str,
+        media_player: str,
+        tts_service: str,
+        tts_language: str,
+        tts_voice: str,
+        notifier_label: str = "JSM Alert Notifier",
+    ) -> None:
+        self.ha_url = ha_url.rstrip("/")
+        self.media_player = media_player
+        self.tts_service = tts_service      # e.g. "tts.home_assistant_cloud"
+        self.tts_language = tts_language    # e.g. "en-US"
+        self.tts_voice = tts_voice          # e.g. "JennyNeural"
+        self.notifier_label = notifier_label  # shown as "artist" in media player UI
+        self._headers = {
+            "Authorization": f"Bearer {ha_token}",
+            "Content-Type": "application/json",
+        }
+
+    # ── Message building ──────────────────────────────────────────────────
+
+    def _build_tts_text(self, alert: Any, action: str) -> str:
+        """Compose the spoken TTS announcement."""
+        spoken_priority, _ = _PRIORITY_META.get(
+            alert.priority, ("Unknown priority", "⚠️")
+        )
+
+        parts: list[str] = []
+
+        if action == "EscalateNext":
+            parts.append("Escalated alert!")
+        else:
+            parts.append("Attention!")
+
+        parts.append(
+            f"{spoken_priority} alert from Jira Service Management."
+        )
+        parts.append(f"Alert: {alert.message}.")
+
+        if alert.entity:
+            parts.append(f"System: {alert.entity}.")
+
+        if alert.description:
+            desc = alert.description[:_DESC_MAX_CHARS]
+            if len(alert.description) > _DESC_MAX_CHARS:
+                desc += "..."
+            parts.append(f"Details: {desc}.")
+
+        return " ".join(parts)
+
+    def _build_media_metadata(self, alert: Any, action: str) -> Dict[str, Any]:
+        """Build the rich metadata block shown in the HA media player UI."""
+        _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
+
+        title = f"{emoji} {alert.priority}: {alert.message}"
+        if action == "EscalateNext":
+            title = f"⬆️ ESCALATED — {title}"
+        if len(title) > 80:
+            title = title[:77] + "…"
+
+        artist = self.notifier_label
+        album = alert.entity or "JSM Alert"
+
+        return {
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "media_class": "app",
+            "children_media_class": None,
+        }
+
+    def _build_tts_content_id(self, tts_text: str) -> str:
+        """Encode the TTS text into the HA media-source URI."""
+        encoded = urllib.parse.quote(tts_text, safe="")
+        return (
+            f"media-source://tts/{self.tts_service}"
+            f"?message={encoded}"
+            f"&language={self.tts_language}"
+            f"&voice={self.tts_voice}"
+        )
+
+    # ── HA service calls ──────────────────────────────────────────────────
+
+    async def _call_service(
+        self, domain: str, service: str, payload: Dict[str, Any]
+    ) -> bool:
+        """POST to /api/services/{domain}/{service}.  Returns True on success."""
+        url = f"{self.ha_url}/api/services/{domain}/{service}"
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                resp = await client.post(
+                    url,
+                    headers=self._headers,
+                    json=payload,
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "HA service call %s.%s failed: HTTP %s — %s",
+                domain,
+                service,
+                exc.response.status_code,
+                exc.response.text[:200],
+            )
+        except Exception as exc:
+            logger.error("HA service call %s.%s error: %s", domain, service, exc)
+        return False
+
+    async def play_tts_alert(self, alert: Any, action: str = "Create") -> bool:
+        """
+        Play a TTS announcement on the configured media player with rich
+        metadata so the player displays the actual alert title.
+        """
+        tts_text = self._build_tts_text(alert, action)
+        content_id = self._build_tts_content_id(tts_text)
+        metadata = self._build_media_metadata(alert, action)
+
+        payload: Dict[str, Any] = {
+            "entity_id": self.media_player,
+            "media_content_id": content_id,
+            "media_content_type": "provider",
+            "extra": {
+                "metadata": {
+                    **metadata,
+                    "navigateIds": [
+                        {},
+                        {
+                            "media_content_type": "app",
+                            "media_content_id": "media-source://tts",
+                        },
+                        {
+                            "media_content_type": "provider",
+                            "media_content_id": content_id,
+                        },
+                    ],
+                }
+            },
+        }
+
+        logger.info(
+            "Playing TTS: entity=%s title=%r",
+            self.media_player,
+            metadata["title"],
+        )
+        return await self._call_service("media_player", "play_media", payload)
+
+    async def send_persistent_notification(
+        self, alert: Any, action: str = "Create"
+    ) -> bool:
+        """
+        Create (or replace) a persistent notification in HA for the alert.
+        Uses the alertId as notification_id so re-deliveries update rather
+        than duplicate.
+        """
+        _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
+
+        title = f"{emoji} JSM {alert.priority} Alert"
+        if action == "EscalateNext":
+            title = f"⬆️ ESCALATED — {title}"
+
+        lines = [f"**{alert.message}**", ""]
+        if alert.entity:
+            lines.append(f"**System:** {alert.entity}")
+        if alert.source:
+            lines.append(f"**Source:** {alert.source}")
+        if alert.description:
+            lines.append(f"\n{alert.description}")
+
+        payload = {
+            "notification_id": f"jsm_alert_{alert.alertId}",
+            "title": title,
+            "message": "\n".join(lines),
+        }
+
+        logger.info(
+            "Creating persistent notification for alert %s", alert.alertId
+        )
+        return await self._call_service(
+            "persistent_notification", "create", payload
+        )
+
+    async def dismiss_notification(self, alert_id: str) -> bool:
+        """Dismiss the persistent notification when an alert is closed/acked."""
+        payload = {"notification_id": f"jsm_alert_{alert_id}"}
+        return await self._call_service(
+            "persistent_notification", "dismiss", payload
+        )
+
+    async def play_tts_message(self, text: str) -> bool:
+        """Play an arbitrary TTS string — used for system alerts like token expiry."""
+        content_id = self._build_tts_content_id(text)
+        payload: Dict[str, Any] = {
+            "entity_id": self.media_player,
+            "media_content_id": content_id,
+            "media_content_type": "provider",
+            "extra": {
+                "metadata": {
+                    "title": "⚠️ JSM Notifier System Alert",
+                    "artist": self.notifier_label,
+                    "media_class": "app",
+                    "children_media_class": None,
+                    "navigateIds": [
+                        {},
+                        {"media_content_type": "app", "media_content_id": "media-source://tts"},
+                        {"media_content_type": "provider", "media_content_id": content_id},
+                    ],
+                }
+            },
+        }
+        return await self._call_service("media_player", "play_media", payload)
+
+    async def send_credential_alert(self, error_detail: str = "") -> None:
+        """
+        Fire a TTS announcement and a persistent HA notification when the
+        Atlassian API token is invalid or has expired.  Both calls are attempted
+        regardless of whether the first one fails.
+        """
+        tts_text = (
+            "Warning! The Atlassian API token used by your JSM alert notifier "
+            "is invalid or has expired. You will not receive on-call alerts "
+            "until the token is updated in the dot-env configuration file."
+        )
+        notif_message = (
+            "The `JSM_API_TOKEN` in your `.env` file is invalid or has been revoked.\n\n"
+            f"**Error:** {error_detail}\n\n"
+            "**Action required:** Create a new token at "
+            "https://id.atlassian.com/manage-profile/security/api-tokens "
+            "and update `JSM_API_TOKEN` in `.env`, then run `docker compose restart`."
+        )
+
+        # Fire both — don't let a TTS failure block the dashboard notification.
+        tts_ok = await self.play_tts_message(tts_text)
+        notif_ok = await self._call_service(
+            "persistent_notification",
+            "create",
+            {
+                "notification_id": "jsm_notifier_credential_alert",
+                "title": "⚠️ JSM Notifier: Invalid API Token",
+                "message": notif_message,
+            },
+        )
+        logger.warning(
+            "Credential alert dispatched — tts=%s  notification=%s",
+            tts_ok,
+            notif_ok,
+        )
+
+    async def dismiss_credential_alert(self) -> None:
+        """
+        Silently dismiss the 'invalid token' persistent notification from HA.
+        Called after a successful credential check so a stale warning doesn't
+        linger in the dashboard after a token rotation.
+        HA returns 200 even if the notification doesn't exist, so this is safe
+        to call unconditionally on every successful check.
+        """
+        await self._call_service(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": "jsm_notifier_credential_alert"},
+        )

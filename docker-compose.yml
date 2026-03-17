@@ -1,0 +1,48 @@
+---
+# JSM Home Assistant Notifier — Docker Compose
+#
+# Quickstart:
+#   1. cp .env.example .env  and fill in your values
+#   2. docker compose up -d
+#
+# To build locally instead of pulling from GHCR, swap the `image:` line for:
+#   build: .
+
+services:
+  jsm-ha-notifier:
+    build: .
+    # Switch to pre-built image after GitHub Actions publishes it:
+    # image: ghcr.io/dougeubanks/jsm-ha-notifier:latest
+    container_name: jsm-ha-notifier
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    # All secrets live in .env — never committed to git
+    env_file:
+      - .env
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp

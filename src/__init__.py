@@ -1,0 +1,1 @@
+# JSM Home Assistant Notifier
