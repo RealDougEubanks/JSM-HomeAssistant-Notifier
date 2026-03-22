@@ -85,16 +85,30 @@ class IncidentStore:
         source = alert.get("source", "") or ""
 
         # Enrichment fields (may come from JSM API detail calls).
-        tags = ",".join(alert.get("tags", [])) if isinstance(alert.get("tags"), list) else ""
+        tags = (
+            ",".join(alert.get("tags", [])) if isinstance(alert.get("tags"), list) else ""
+        )
         teams_raw = alert.get("teams", [])
-        teams = ",".join(
-            t.get("name", t.get("id", "")) for t in teams_raw if isinstance(t, dict)
-        ) if isinstance(teams_raw, list) else ""
+        teams = (
+            ",".join(
+                t.get("name", t.get("id", "")) for t in teams_raw if isinstance(t, dict)
+            )
+            if isinstance(teams_raw, list)
+            else ""
+        )
         responders_raw = alert.get("responders", [])
-        responders = ",".join(
-            r.get("name", r.get("id", "")) for r in responders_raw if isinstance(r, dict)
-        ) if isinstance(responders_raw, list) else ""
-        details_json = json.dumps(alert.get("details", {})) if alert.get("details") else ""
+        responders = (
+            ",".join(
+                r.get("name", r.get("id", ""))
+                for r in responders_raw
+                if isinstance(r, dict)
+            )
+            if isinstance(responders_raw, list)
+            else ""
+        )
+        details_json = (
+            json.dumps(alert.get("details", {})) if alert.get("details") else ""
+        )
 
         # Determine status from action.
         status = "open"
@@ -133,9 +147,24 @@ class IncidentStore:
                 acknowledged_at = COALESCE(excluded.acknowledged_at, incidents.acknowledged_at),
                 closed_at = COALESCE(excluded.closed_at, incidents.closed_at)
             """,
-            (alert_id, message, priority, entity, description, source,
-             status, action, tags, teams, responders, details_json,
-             now, now, ack_at, closed_at),
+            (
+                alert_id,
+                message,
+                priority,
+                entity,
+                description,
+                source,
+                status,
+                action,
+                tags,
+                teams,
+                responders,
+                details_json,
+                now,
+                now,
+                ack_at,
+                closed_at,
+            ),
         )
         conn.commit()
 
@@ -177,8 +206,17 @@ class IncidentStore:
                     status = excluded.status,
                     updated_at = excluded.updated_at
                 """,
-                (alert_id, message, priority, entity, description, source,
-                 status, now, now),
+                (
+                    alert_id,
+                    message,
+                    priority,
+                    entity,
+                    description,
+                    source,
+                    status,
+                    now,
+                    now,
+                ),
             )
             count += 1
 
@@ -247,9 +285,7 @@ class IncidentStore:
         ).fetchall()
         by_priority = {row["priority"]: row["count"] for row in prio_rows}
 
-        total_open = sum(
-            v for k, v in by_status.items() if k != "closed"
-        )
+        total_open = sum(v for k, v in by_status.items() if k != "closed")
         return {
             "total_open": total_open,
             "total_closed": by_status.get("closed", 0),
@@ -310,7 +346,9 @@ class IncidentStore:
             logger.info(
                 "Retention cleanup: deleted %d stale incident(s) "
                 "(open_days=%d, closed_days=%d)",
-                deleted, open_days, closed_days,
+                deleted,
+                open_days,
+                closed_days,
             )
         return deleted
 

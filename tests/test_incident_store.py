@@ -34,7 +34,12 @@ def store(db_path: str) -> IncidentStore:
 
 
 async def test_upsert_and_get(store: IncidentStore):
-    alert = {"alertId": "inc-001", "message": "Server down", "priority": "P1", "entity": "prod-01"}
+    alert = {
+        "alertId": "inc-001",
+        "message": "Server down",
+        "priority": "P1",
+        "entity": "prod-01",
+    }
     await store.upsert(alert, "Create")
 
     result = await store.get_one("inc-001")
@@ -144,9 +149,12 @@ def _settings(**kwargs) -> Settings:
 async def test_fire_webhooks_on_create():
     settings = _settings(ha_webhook_on_create="jsm_alert_created")
     ha = HAClient(
-        ha_url=settings.ha_url, ha_token=settings.ha_token,
-        media_player="media_player.test", tts_service="tts.test",
-        tts_language="en-US", tts_voice="TestVoice",
+        ha_url=settings.ha_url,
+        ha_token=settings.ha_token,
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
     )
     ha.fire_webhook = AsyncMock(return_value=True)
     ha.play_tts_alert = AsyncMock(return_value=True)
@@ -168,9 +176,12 @@ async def test_fire_webhooks_on_create():
 async def test_fire_webhooks_skips_when_empty():
     settings = _settings()  # All webhook configs empty.
     ha = HAClient(
-        ha_url=settings.ha_url, ha_token=settings.ha_token,
-        media_player="media_player.test", tts_service="tts.test",
-        tts_language="en-US", tts_voice="TestVoice",
+        ha_url=settings.ha_url,
+        ha_token=settings.ha_token,
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
     )
     ha.fire_webhook = AsyncMock(return_value=True)
 
@@ -186,9 +197,12 @@ async def test_fire_webhooks_skips_when_empty():
 async def test_fire_webhooks_on_sla_breach():
     settings = _settings(ha_webhook_on_sla_breach="sla_breach_hook")
     ha = HAClient(
-        ha_url=settings.ha_url, ha_token=settings.ha_token,
-        media_player="media_player.test", tts_service="tts.test",
-        tts_language="en-US", tts_voice="TestVoice",
+        ha_url=settings.ha_url,
+        ha_token=settings.ha_token,
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
     )
     ha.fire_webhook = AsyncMock(return_value=True)
 
@@ -198,25 +212,34 @@ async def test_fire_webhooks_on_sla_breach():
     payload = make_alert(action="SlaBreached")
     await proc._fire_automation_webhooks(payload)
 
-    ha.fire_webhook.assert_called_once_with("sla_breach_hook", pytest.approx({
-        "event": "SlaBreached",
-        "alert_id": "alert-001",
-        "message": "Server CPU High",
-        "priority": "P1",
-        "entity": "prod-server-01",
-        "description": "CPU usage above 90%",
-        "source": "",
-        "tags": [],
-    }, abs=0))
+    ha.fire_webhook.assert_called_once_with(
+        "sla_breach_hook",
+        pytest.approx(
+            {
+                "event": "SlaBreached",
+                "alert_id": "alert-001",
+                "message": "Server CPU High",
+                "priority": "P1",
+                "entity": "prod-server-01",
+                "description": "CPU usage above 90%",
+                "source": "",
+                "tags": [],
+            },
+            abs=0,
+        ),
+    )
 
 
 async def test_process_updates_incident_store():
     """Verify the processor updates the incident store on every action."""
     settings = _settings(always_notify_schedule_names=["test"])
     ha = HAClient(
-        ha_url=settings.ha_url, ha_token=settings.ha_token,
-        media_player="media_player.test", tts_service="tts.test",
-        tts_language="en-US", tts_voice="TestVoice",
+        ha_url=settings.ha_url,
+        ha_token=settings.ha_token,
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
     )
     ha.play_tts_alert = AsyncMock(return_value=True)
     ha.send_persistent_notification = AsyncMock(return_value=True)
@@ -250,7 +273,9 @@ async def test_process_updates_incident_store():
 
 
 async def test_force_close(store: IncidentStore):
-    await store.upsert({"alertId": "fc-001", "message": "Test", "priority": "P1"}, "Create")
+    await store.upsert(
+        {"alertId": "fc-001", "message": "Test", "priority": "P1"}, "Create"
+    )
     closed = await store.force_close("fc-001")
     assert closed is True
 
@@ -261,8 +286,12 @@ async def test_force_close(store: IncidentStore):
 
 
 async def test_force_close_already_closed(store: IncidentStore):
-    await store.upsert({"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Create")
-    await store.upsert({"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Close")
+    await store.upsert(
+        {"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Create"
+    )
+    await store.upsert(
+        {"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Close"
+    )
     closed = await store.force_close("fc-002")
     assert closed is False
 
@@ -277,9 +306,15 @@ async def test_force_close_not_found(store: IncidentStore):
 
 async def test_retention_cleanup(store: IncidentStore):
     # Insert incidents.
-    await store.upsert({"alertId": "ret-1", "message": "Old open", "priority": "P1"}, "Create")
-    await store.upsert({"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Create")
-    await store.upsert({"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Close")
+    await store.upsert(
+        {"alertId": "ret-1", "message": "Old open", "priority": "P1"}, "Create"
+    )
+    await store.upsert(
+        {"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Create"
+    )
+    await store.upsert(
+        {"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Close"
+    )
 
     # With 0 days retention, nothing should be deleted.
     deleted = await store.cleanup(open_days=0, closed_days=0)

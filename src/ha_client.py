@@ -29,11 +29,11 @@ _REQUEST_TIMEOUT = 10.0
 
 # Priority → (spoken label, emoji)
 _PRIORITY_META: dict[str, tuple[str, str]] = {
-    "P1": ("Priority 1, Critical",   "🔴"),
-    "P2": ("Priority 2, High",       "🟠"),
-    "P3": ("Priority 3, Medium",     "🟡"),
-    "P4": ("Priority 4, Low",        "🟢"),
-    "P5": ("Priority 5, Information","⚪"),
+    "P1": ("Priority 1, Critical", "🔴"),
+    "P2": ("Priority 2, High", "🟠"),
+    "P3": ("Priority 3, Medium", "🟡"),
+    "P4": ("Priority 4, Low", "🟢"),
+    "P5": ("Priority 5, Information", "⚪"),
 }
 
 # Maximum characters kept from the description inside a TTS message.
@@ -68,7 +68,7 @@ _safe_fmt = _SafeFormatter()
 # Characters that could be interpreted as shell metacharacters, command
 # substitution, or script injection if the TTS text or notification content
 # is ever passed through a shell, template engine, or markup renderer.
-_SHELL_META_RE = re.compile(r'[`$;|&<>{}()\\\x00-\x1f]')
+_SHELL_META_RE = re.compile(r"[`$;|&<>{}()\\\x00-\x1f]")
 
 
 def _sanitize(text: str) -> str:
@@ -81,19 +81,19 @@ def _sanitize(text: str) -> str:
 # incoming alert text from JSM or other sources.
 _EMOJI_RE = re.compile(
     "["
-    "\U0001F600-\U0001F64F"  # Emoticons
-    "\U0001F300-\U0001F5FF"  # Misc Symbols and Pictographs
-    "\U0001F680-\U0001F6FF"  # Transport and Map
-    "\U0001F1E0-\U0001F1FF"  # Flags
-    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-    "\U0001FA00-\U0001FA6F"  # Chess Symbols
-    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-    "\U00002702-\U000027B0"  # Dingbats
-    "\U000024C2-\U0001F251"  # Enclosed characters
-    "\U0000FE0F"             # Variation Selector-16
-    "\U0000200D"             # Zero Width Joiner
-    "\U00002600-\U000026FF"  # Misc symbols (⚠, ⬆, ☀, etc.)
-    "\U00002B05-\U00002B55"  # Arrows and geometric shapes
+    "\U0001f600-\U0001f64f"  # Emoticons
+    "\U0001f300-\U0001f5ff"  # Misc Symbols and Pictographs
+    "\U0001f680-\U0001f6ff"  # Transport and Map
+    "\U0001f1e0-\U0001f1ff"  # Flags
+    "\U0001f900-\U0001f9ff"  # Supplemental Symbols and Pictographs
+    "\U0001fa00-\U0001fa6f"  # Chess Symbols
+    "\U0001fa70-\U0001faff"  # Symbols and Pictographs Extended-A
+    "\U00002702-\U000027b0"  # Dingbats
+    "\U000024c2-\U0001f251"  # Enclosed characters
+    "\U0000fe0f"  # Variation Selector-16
+    "\U0000200d"  # Zero Width Joiner
+    "\U00002600-\U000026ff"  # Misc symbols (⚠, ⬆, ☀, etc.)
+    "\U00002b05-\U00002b55"  # Arrows and geometric shapes
     "]+",
     flags=re.UNICODE,
 )
@@ -125,9 +125,9 @@ class HAClient:
     ) -> None:
         self.ha_url = ha_url.rstrip("/")
         self.media_player = media_player
-        self.tts_service = tts_service      # e.g. "tts.home_assistant_cloud"
-        self.tts_language = tts_language    # e.g. "en-US"
-        self.tts_voice = tts_voice          # e.g. "JennyNeural"
+        self.tts_service = tts_service  # e.g. "tts.home_assistant_cloud"
+        self.tts_language = tts_language  # e.g. "en-US"
+        self.tts_voice = tts_voice  # e.g. "JennyNeural"
         self.notifier_label = notifier_label  # shown as "artist" in media player UI
         self.announcement_format = announcement_format
         self.terse_announcement_format = terse_announcement_format
@@ -172,7 +172,9 @@ class HAClient:
 
         message = self._clean(alert.message)
         entity = self._clean(alert.entity) if alert.entity else ""
-        description = self._clean(alert.description)[:_DESC_MAX_CHARS] if alert.description else ""
+        description = (
+            self._clean(alert.description)[:_DESC_MAX_CHARS] if alert.description else ""
+        )
 
         entity_part = f" System: {entity}." if entity else ""
         description_part = ""
@@ -210,7 +212,11 @@ class HAClient:
         prefix = f"{self._emoji(emoji)} " if emoji else ""
         title = f"{prefix}{alert.priority}: {message}".strip()
         if action == "EscalateNext":
-            esc_prefix = f"{self._emoji('⬆️')} ESCALATED — " if self.enable_emojis else "ESCALATED — "
+            esc_prefix = (
+                f"{self._emoji('⬆️')} ESCALATED — "
+                if self.enable_emojis
+                else "ESCALATED — "
+            )
             title = f"{esc_prefix}{title}"
         if len(title) > 80:
             title = title[:77] + "…"
@@ -288,7 +294,11 @@ class HAClient:
         entity = target_entity or self.media_player
 
         # Set volume before playback if configured.
-        volume = self.volume_terse if terse and self.volume_terse is not None else self.volume_default
+        volume = (
+            self.volume_terse
+            if terse and self.volume_terse is not None
+            else self.volume_default
+        )
         if volume is not None:
             await self._set_volume(entity, volume)
 
@@ -330,7 +340,11 @@ class HAClient:
         return await self._call_service("media_player", "play_media", payload)
 
     async def play_tts_batch(
-        self, alerts: list[Any], actions: list[str], *, target_entity: str | None = None,
+        self,
+        alerts: list[Any],
+        actions: list[str],
+        *,
+        target_entity: str | None = None,
     ) -> bool:
         """Play a batched announcement for multiple alerts."""
         entity = target_entity or self.media_player
@@ -358,8 +372,14 @@ class HAClient:
                     **metadata,
                     "navigateIds": [
                         {},
-                        {"media_content_type": "app", "media_content_id": "media-source://tts"},
-                        {"media_content_type": "provider", "media_content_id": content_id},
+                        {
+                            "media_content_type": "app",
+                            "media_content_id": "media-source://tts",
+                        },
+                        {
+                            "media_content_type": "provider",
+                            "media_content_id": content_id,
+                        },
                     ],
                 }
             },
@@ -381,7 +401,11 @@ class HAClient:
         prefix = f"{self._emoji(emoji)} " if emoji else ""
         title = f"{prefix}JSM {alert.priority} Alert".strip()
         if action == "EscalateNext":
-            esc_prefix = f"{self._emoji('⬆️')} ESCALATED — " if self.enable_emojis else "ESCALATED — "
+            esc_prefix = (
+                f"{self._emoji('⬆️')} ESCALATED — "
+                if self.enable_emojis
+                else "ESCALATED — "
+            )
             title = f"{esc_prefix}{title}"
 
         message = self._clean(alert.message)
@@ -403,19 +427,13 @@ class HAClient:
             "message": "\n".join(lines),
         }
 
-        logger.info(
-            "Creating persistent notification for alert %s", alert.alertId
-        )
-        return await self._call_service(
-            "persistent_notification", "create", payload
-        )
+        logger.info("Creating persistent notification for alert %s", alert.alertId)
+        return await self._call_service("persistent_notification", "create", payload)
 
     async def dismiss_notification(self, alert_id: str) -> bool:
         """Dismiss the persistent notification when an alert is closed/acked."""
         payload = {"notification_id": f"jsm_alert_{alert_id}"}
-        return await self._call_service(
-            "persistent_notification", "dismiss", payload
-        )
+        return await self._call_service("persistent_notification", "dismiss", payload)
 
     async def play_tts_message(self, text: str) -> bool:
         """Play an arbitrary TTS string — used for system alerts like token expiry."""
@@ -432,8 +450,14 @@ class HAClient:
                     "children_media_class": None,
                     "navigateIds": [
                         {},
-                        {"media_content_type": "app", "media_content_id": "media-source://tts"},
-                        {"media_content_type": "provider", "media_content_id": content_id},
+                        {
+                            "media_content_type": "app",
+                            "media_content_id": "media-source://tts",
+                        },
+                        {
+                            "media_content_type": "provider",
+                            "media_content_id": content_id,
+                        },
                     ],
                 }
             },
@@ -484,7 +508,9 @@ class HAClient:
         url = f"{self.ha_url}/api/"
         try:
             resp = await self._http.get(
-                url, headers=self._headers, timeout=_REQUEST_TIMEOUT,
+                url,
+                headers=self._headers,
+                timeout=_REQUEST_TIMEOUT,
             )
             if resp.status_code == 401:
                 return False, "401 Unauthorized — HA token is invalid"
@@ -510,7 +536,9 @@ class HAClient:
         url = f"{self.ha_url}/api/webhook/{webhook_id}"
         try:
             resp = await self._http.post(
-                url, json=data, timeout=_REQUEST_TIMEOUT,
+                url,
+                json=data,
+                timeout=_REQUEST_TIMEOUT,
             )
             # HA returns 200 even if no automation matches — that's fine.
             resp.raise_for_status()
@@ -521,7 +549,9 @@ class HAClient:
             return False
 
     async def fire_webhooks(
-        self, webhook_ids: str, data: dict[str, Any],
+        self,
+        webhook_ids: str,
+        data: dict[str, Any],
     ) -> None:
         """Fire one or more comma-separated HA webhook IDs."""
         if not webhook_ids.strip():

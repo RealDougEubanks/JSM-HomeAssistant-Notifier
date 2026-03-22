@@ -2,14 +2,18 @@
 Tests for Settings / config parsing — specifically the CSV list fields that
 were crashing pydantic-settings with a JSONDecodeError before this fix.
 """
+
 from __future__ import annotations
 
 from src.config import Settings, _parse_csv_or_json
 
 # ── Unit tests for the CSV parser helper ──────────────────────────────────────
 
+
 def test_parse_csv_plain_string():
-    result = _parse_csv_or_json("always_notify_schedule_names", "Internal Systems_schedule")
+    result = _parse_csv_or_json(
+        "always_notify_schedule_names", "Internal Systems_schedule"
+    )
     assert result == ["Internal Systems_schedule"]
 
 
@@ -54,6 +58,7 @@ def test_parse_csv_already_a_list():
 
 
 # ── Integration: Settings parses CSV strings from init kwargs ─────────────────
+
 
 def test_settings_csv_single(tmp_path):
     """Settings accepts a plain string for list fields (the crash scenario)."""

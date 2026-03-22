@@ -1,4 +1,5 @@
 """Tests for configurable announcement formats, time-window integration, and new features."""
+
 from __future__ import annotations
 
 from datetime import time
@@ -13,6 +14,7 @@ from src.jsm_client import JSMClient
 from tests.conftest import make_alert
 
 # ── HAClient format tests ───────────────────────────────────────────────────
+
 
 def test_default_format_matches_original(ha_client: HAClient):
     """The default configurable format should produce the same output as before."""
@@ -73,6 +75,7 @@ def test_terse_format_with_escalation():
 
 # ── AlertProcessor time-window integration ──────────────────────────────────
 
+
 def _make_processor(
     settings: Settings,
     is_on_call: bool = False,
@@ -110,6 +113,7 @@ def _settings_with(**kwargs) -> Settings:
 
 
 # ── Silent / terse window tests ──────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_silent_window_suppresses_tts():
@@ -173,6 +177,7 @@ async def test_silent_wins_over_terse():
 
 # ── Priority override for silent windows ─────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_priority_override_bypasses_silent():
     """P1 alerts should bypass silent window when configured."""
@@ -224,6 +229,7 @@ async def test_priority_override_multiple_priorities():
 
 # ── Media player routing ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_media_player_routing_uses_time_based_player():
     """TTS should be routed to the time-matched media player."""
@@ -257,6 +263,7 @@ async def test_media_player_routing_falls_back_to_default():
 
 # ── Dismiss cancels TTS repeat ───────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_dismiss_cancels_tts_repeat():
     """Acknowledging an alert should cancel its TTS repeat task."""
@@ -283,6 +290,7 @@ async def test_dismiss_cancels_tts_repeat():
 
 
 # ── TTS repeat not started for non-qualifying priorities ─────────────────────
+
 
 @pytest.mark.asyncio
 async def test_no_repeat_for_low_priority():
@@ -314,6 +322,7 @@ async def test_no_repeat_when_disabled():
 
 
 # ── Config parsing of window strings ────────────────────────────────────────
+
 
 def test_config_parses_silent_window():
     s = _settings_with(silent_window="22:00-07:00")

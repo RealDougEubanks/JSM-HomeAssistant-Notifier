@@ -117,8 +117,7 @@ class JSMClient:
         found = self._schedule_id_cache.get(schedule_name)
         if not found:
             logger.warning(
-                "Schedule '%s' not found in JSM. "
-                "Available schedules: %s",
+                "Schedule '%s' not found in JSM. " "Available schedules: %s",
                 schedule_name,
                 list(self._schedule_id_cache.keys()),
             )
@@ -141,9 +140,7 @@ class JSMClient:
         if cached is not None:
             is_on_call, fetched_at = cached
             if now - fetched_at < cache_ttl:
-                logger.debug(
-                    "On-call cache hit for %s: %s", schedule_id, is_on_call
-                )
+                logger.debug("On-call cache hit for %s: %s", schedule_id, is_on_call)
                 return is_on_call
 
         try:
@@ -157,9 +154,7 @@ class JSMClient:
             data = response.json()
 
             participants = data.get("onCallParticipants") or []
-            is_on_call = any(
-                p.get("id") == self.my_user_id for p in participants
-            )
+            is_on_call = any(p.get("id") == self.my_user_id for p in participants)
             self._oncall_cache[schedule_id] = (is_on_call, now)
             logger.info(
                 "On-call status for schedule %s: %s (participants: %s)",
@@ -226,7 +221,9 @@ class JSMClient:
 
         Returns (True, "") on success, or (False, error_detail) on failure.
         """
-        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}/acknowledge"
+        url = (
+            f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}/acknowledge"
+        )
         try:
             response = await self._http.post(
                 url,

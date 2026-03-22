@@ -1,4 +1,5 @@
 """Tests for the JSM webhook payload models."""
+
 from __future__ import annotations
 
 import json
