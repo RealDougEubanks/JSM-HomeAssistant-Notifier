@@ -45,7 +45,17 @@ JSM alert created / escalated
 - **Rich TTS** — spoken announcements include priority, alert title, system name, and a description excerpt
 - **Real media player title** — uses `extra.metadata` so HA shows the actual alert title instead of "Playing Default Media Receiver"
 - **Persistent HA notifications** — created on alert, auto-dismissed on Acknowledge or Close
+- **Configurable announcement formats** — customise the detailed and terse TTS templates with placeholders
+- **Time-based quiet hours** — silent windows (no TTS) and terse windows (short format), with cross-midnight support
+- **Priority override for silent mode** — P1/P2 alerts can bypass silent windows so critical incidents always wake you
+- **Per-media-player routing** — route TTS to different speakers by time of day (e.g. bedroom at night, office during the day)
+- **Volume control** — set media player volume before TTS playback, with separate levels for full and terse modes
+- **Alert batching** — combine multiple alerts arriving within a configurable window into one TTS announcement
+- **TTS repeat (pager mode)** — repeat TTS at intervals for critical alerts until acknowledged or max repeats hit
+- **Acknowledge from HA** — `POST /alert/{id}/acknowledge` endpoint lets HA automations ack alerts without opening JSM
 - **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
+- **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
+- **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
 - **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`
 
@@ -406,9 +416,19 @@ Receives JSM webhook payloads.
 
 Expected payload: standard OpsGenie / JSM Ops outgoing webhook JSON.
 
+### `POST /alert/{alert_id}/acknowledge`
+
+Acknowledges a JSM alert, dismisses the HA notification, and cancels TTS repeats.  Intended for use from HA automations (see `.env.example` for a ready-to-use `rest_command` snippet).
+
+Returns `{"alert_id": "...", "acknowledged": true}` on success, 502 if JSM rejects the request.
+
 ### `GET /health`
 
 Returns `{"status": "ok"}`.  Used by Docker health-check and external monitors.
+
+### `GET /healthz`
+
+Deep health check — verifies JSM API credentials and HA API connectivity.  Returns 200 with `{"healthy": true, ...}` if both pass, or 503 if either fails.  Use this for readiness probes or monitoring dashboards.
 
 ### `GET /status`
 
@@ -573,13 +593,16 @@ jsm-ha-notifier/
 │   ├── models.py           # JSM webhook payload models
 │   ├── jsm_client.py       # Async JSM Ops API client with caching
 │   ├── ha_client.py        # Async Home Assistant REST API client
-│   └── alert_processor.py  # Core routing / dedup / notification logic
+│   ├── alert_processor.py  # Core routing / dedup / notification logic
+│   └── time_windows.py     # Time-window parsing and media player routing
 ├── tests/
 │   ├── conftest.py         # Shared fixtures
 │   ├── test_models.py
 │   ├── test_config.py
 │   ├── test_ha_client.py
-│   └── test_alert_processor.py
+│   ├── test_alert_processor.py
+│   ├── test_announcement_format.py  # Format, time windows, priority override, repeat
+│   └── test_time_windows.py         # Window parsing, player routing
 ├── .env.example            # Template — copy to .env and fill in values
 ├── .gitignore
 ├── docker-compose.yml

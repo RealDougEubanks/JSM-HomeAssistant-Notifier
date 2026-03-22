@@ -35,7 +35,9 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+import re
+
+from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
 
 from .alert_processor import AlertProcessor
@@ -123,6 +125,20 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
             settings.check_oncall_schedule_names,
             settings.token_check_interval_hours,
         )
+
+        # ── Startup connectivity checks (non-blocking) ────────────────
+        jsm_ok, jsm_err = await jsm_client.verify_credentials()
+        if jsm_ok:
+            logger.info("Startup check: JSM API — OK")
+        else:
+            logger.warning("Startup check: JSM API — FAILED (%s)", jsm_err)
+
+        ha_ok, ha_err = await ha_client.verify_connectivity()
+        if ha_ok:
+            logger.info("Startup check: HA API — OK")
+        else:
+            logger.warning("Startup check: HA API — FAILED (%s)", ha_err)
+
         task = asyncio.create_task(_credential_check_loop())
         try:
             yield
@@ -132,6 +148,9 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
                 await task
             except asyncio.CancelledError:
                 pass
+            # Close persistent HTTP clients.
+            await jsm_client.aclose()
+            await ha_client.aclose()
             logger.info("JSM-HA Notifier shutting down.")
 
     app = FastAPI(
@@ -160,18 +179,23 @@ def _verify_signature(request: Request, body: bytes) -> bool:
     if not _settings.webhook_secret:
         return True
 
-    sig_header = request.headers.get("X-Hub-Signature-256", "")
-    if not sig_header.startswith("sha256="):
-        logger.warning("Webhook request missing X-Hub-Signature-256 header")
+    try:
+        sig_header = request.headers.get("X-Hub-Signature-256", "")
+        if not sig_header.startswith("sha256="):
+            logger.warning("Webhook request missing or malformed X-Hub-Signature-256 header")
+            return False
+
+        expected = "sha256=" + hmac.new(
+            _settings.webhook_secret.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+
+        return hmac.compare_digest(sig_header, expected)
+    except Exception:
+        # Catch-all to prevent any exception from leaking the secret in a traceback.
+        logger.error("Webhook signature verification error")
         return False
-
-    expected = "sha256=" + hmac.new(
-        _settings.webhook_secret.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-
-    return hmac.compare_digest(sig_header, expected)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -180,6 +204,29 @@ def _verify_signature(request: Request, body: bytes) -> bool:
 async def health_check():
     """Docker / Kubernetes liveness probe."""
     return {"status": "ok"}
+
+
+@app.get("/healthz", tags=["ops"])
+async def deep_health_check():
+    """
+    Deep health check — verifies JSM and HA API connectivity.
+
+    Returns 200 if all checks pass, 503 if any fail.  Useful for monitoring
+    dashboards and more thorough readiness probes.
+    """
+    checks: dict = {}
+
+    jsm_ok, jsm_err = await _processor.jsm_client.verify_credentials()
+    checks["jsm_api"] = "ok" if jsm_ok else f"error: {jsm_err[:100]}"
+
+    ha_ok, ha_err = await _processor.ha_client.verify_connectivity()
+    checks["ha_api"] = "ok" if ha_ok else f"error: {ha_err[:100]}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        {"healthy": all_ok, "checks": checks},
+        status_code=200 if all_ok else 503,
+    )
 
 
 @app.get("/status", tags=["ops"])
@@ -214,21 +261,44 @@ async def invalidate_cache():
     return {"status": "cache invalidated"}
 
 
+# Allowed characters in JSM alert IDs (UUIDs, alphanumeric, hyphens, underscores).
+_ALERT_ID_RE = re.compile(r"^[a-zA-Z0-9\-_]{1,200}$")
+
+
 @app.post("/alert/{alert_id}/acknowledge", tags=["webhook"])
-async def acknowledge_alert(alert_id: str):
+async def acknowledge_alert(
+    request: Request,
+    alert_id: str = Path(
+        ...,
+        description="JSM alert ID (alphanumeric, hyphens, underscores; max 200 chars)",
+    ),
+):
     """
     Acknowledge a JSM alert by alert ID.
 
     Intended for use from HA automations — e.g. a button on the dashboard or a
     voice command that calls this endpoint to acknowledge the alert without
     needing to open the JSM web UI.
+
+    Returns 200 with ``{"alert_id": ..., "acknowledged": true}`` on success,
+    400 for invalid alert IDs, or 502 if the JSM API call fails.
     """
+    if not _ALERT_ID_RE.match(alert_id):
+        raise HTTPException(status_code=400, detail="Invalid alert_id format")
+
+    source_ip = request.client.host if request.client else "unknown"
+    logger.info(
+        "Acknowledge request — alert_id=%s source_ip=%s",
+        alert_id,
+        source_ip,
+    )
+
     success, error = await _processor.jsm_client.acknowledge_alert(alert_id)
     if success:
         # Also dismiss the persistent notification and stop TTS repeats.
         await _processor.ha_client.dismiss_notification(alert_id)
         _processor.cancel_tts_repeat(alert_id)
-        logger.info("Alert %s acknowledged via API", alert_id)
+        logger.info("Alert %s acknowledged via API from %s", alert_id, source_ip)
         return {"alert_id": alert_id, "acknowledged": True}
     logger.error("Failed to acknowledge alert %s: %s", alert_id, error)
     raise HTTPException(status_code=502, detail=f"JSM acknowledge failed: {error}")

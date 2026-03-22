@@ -45,6 +45,13 @@ class JSMClient:
         # schedule_id → (is_on_call, fetched_at_timestamp)
         self._oncall_cache: Dict[str, Tuple[bool, float]] = {}
 
+        # Persistent HTTP client — reused across requests to avoid socket churn.
+        self._http: httpx.AsyncClient = httpx.AsyncClient(trust_env=False)
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client.  Called during application shutdown."""
+        await self._http.aclose()
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     def _base_headers(self) -> Dict[str, str]:
@@ -66,23 +73,22 @@ class JSMClient:
         url: Optional[str] = self._schedules_url()
         schedules: List[Dict[str, Any]] = []
 
-        async with httpx.AsyncClient(trust_env=False) as client:
-            while url:
-                response = await client.get(
-                    url,
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-                data = response.json()
+        while url:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-                page = data.get("values") or []
-                schedules.extend(page)
+            page = data.get("values") or []
+            schedules.extend(page)
 
-                # JSM paginates via a "next" cursor parameter
-                next_cursor = data.get("paging", {}).get("next")
-                url = next_cursor if next_cursor else None
+            # JSM paginates via a "next" cursor parameter
+            next_cursor = data.get("paging", {}).get("next")
+            url = next_cursor if next_cursor else None
 
         logger.debug("Fetched %d schedules from JSM", len(schedules))
         return schedules
@@ -141,15 +147,14 @@ class JSMClient:
                 return is_on_call
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.get(
-                    self._oncall_url(schedule_id),
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await self._http.get(
+                self._oncall_url(schedule_id),
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
 
             participants = data.get("onCallParticipants") or []
             is_on_call = any(
@@ -189,13 +194,12 @@ class JSMClient:
         """
         url = self._schedules_url()
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.get(
-                    url,
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
             if response.status_code == 401:
                 return False, "401 Unauthorized — token is invalid or has been revoked"
             if response.status_code == 403:
@@ -224,14 +228,13 @@ class JSMClient:
         """
         url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}/acknowledge"
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.post(
-                    url,
-                    auth=self._auth,
-                    headers={**self._base_headers(), "Content-Type": "application/json"},
-                    json={"user": self.my_user_id},
-                    timeout=_REQUEST_TIMEOUT,
-                )
+            response = await self._http.post(
+                url,
+                auth=self._auth,
+                headers={**self._base_headers(), "Content-Type": "application/json"},
+                json={"user": self.my_user_id},
+                timeout=_REQUEST_TIMEOUT,
+            )
             if response.status_code in (200, 202):
                 logger.info("Alert %s acknowledged via JSM API", alert_id)
                 return True, ""

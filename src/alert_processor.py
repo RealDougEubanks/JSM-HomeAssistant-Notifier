@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # Actions that produce an audible / visible notification.
 _NOTIFY_ACTIONS = {"Create", "EscalateNext"}
 
+# Hard cap on dedup cache entries to prevent unbounded memory growth
+# (e.g. from an attacker sending alerts with random IDs).
+_MAX_DEDUP_CACHE_SIZE = 10_000
+
 # Actions that should dismiss the persistent HA notification.
 _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 
@@ -97,6 +101,17 @@ class AlertProcessor:
         stale = [k for k, ts in self._dedup_cache.items() if now - ts > ttl]
         for k in stale:
             del self._dedup_cache[k]
+
+        # Hard cap: evict oldest half if cache is too large (DoS protection).
+        if len(self._dedup_cache) >= _MAX_DEDUP_CACHE_SIZE:
+            oldest = sorted(self._dedup_cache, key=self._dedup_cache.get)  # type: ignore[arg-type]
+            for k in oldest[: len(oldest) // 2]:
+                del self._dedup_cache[k]
+            logger.warning(
+                "Dedup cache hit max size (%d) — evicted %d oldest entries",
+                _MAX_DEDUP_CACHE_SIZE,
+                len(oldest) // 2,
+            )
 
         if key in self._dedup_cache:
             logger.info("Duplicate suppressed: %s", key)
@@ -197,25 +212,31 @@ class AlertProcessor:
         max_repeats = self.settings.tts_repeat_max
         alert_id = alert.alertId
 
-        for i in range(max_repeats):
-            await asyncio.sleep(interval)
-            logger.info(
-                "TTS repeat %d/%d for alert %s", i + 1, max_repeats, alert_id
-            )
-            await self.ha_client.play_tts_alert(
-                alert, action, target_entity=target_entity,
-            )
-
-        logger.info("TTS repeat exhausted (%d repeats) for alert %s", max_repeats, alert_id)
-        self._repeat_tasks.pop(alert_id, None)
+        try:
+            for i in range(max_repeats):
+                await asyncio.sleep(interval)
+                logger.info(
+                    "TTS repeat %d/%d for alert %s", i + 1, max_repeats, alert_id
+                )
+                await self.ha_client.play_tts_alert(
+                    alert, action, target_entity=target_entity,
+                )
+            logger.info("TTS repeat exhausted (%d repeats) for alert %s", max_repeats, alert_id)
+        except asyncio.CancelledError:
+            logger.info("TTS repeat cancelled for alert %s", alert_id)
+        finally:
+            self._repeat_tasks.pop(alert_id, None)
 
     def _start_tts_repeat(
         self, alert: Any, action: str, target_entity: str,
     ) -> None:
         """Start a background repeat loop for this alert."""
         alert_id = alert.alertId
-        if alert_id in self._repeat_tasks:
-            return  # already repeating
+
+        # Cancel any existing repeat before starting a new one.
+        old_task = self._repeat_tasks.pop(alert_id, None)
+        if old_task and not old_task.done():
+            old_task.cancel()
 
         task = asyncio.create_task(
             self._repeat_tts_loop(alert, action, target_entity)
@@ -305,14 +326,15 @@ class AlertProcessor:
 
         # ── Dismiss on close / ack ────────────────────────────────────────
         if payload.action in _DISMISS_ACTIONS:
-            await self.ha_client.dismiss_notification(payload.alert.alertId)
+            dismiss_ok = await self.ha_client.dismiss_notification(payload.alert.alertId)
             self.cancel_tts_repeat(payload.alert.alertId)
             result["dismissed"] = True
             result["reason"] = f"dismissed on action '{payload.action}'"
             logger.info(
-                "Dismissed notification for alert %s (action=%s)",
+                "Dismissed notification for alert %s (action=%s ha_dismiss=%s)",
                 payload.alert.alertId,
                 payload.action,
+                "ok" if dismiss_ok else "failed",
             )
             return result
 

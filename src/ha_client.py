@@ -70,6 +70,12 @@ class HAClient:
             "Authorization": f"Bearer {ha_token}",
             "Content-Type": "application/json",
         }
+        # Persistent HTTP client — reused across requests to avoid socket churn.
+        self._http: httpx.AsyncClient = httpx.AsyncClient(trust_env=False)
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client.  Called during application shutdown."""
+        await self._http.aclose()
 
     # ── Message building ──────────────────────────────────────────────────
 
@@ -148,14 +154,13 @@ class HAClient:
         """POST to /api/services/{domain}/{service}.  Returns True on success."""
         url = f"{self.ha_url}/api/services/{domain}/{service}"
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                resp = await client.post(
-                    url,
-                    headers=self._headers,
-                    json=payload,
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                resp.raise_for_status()
+            resp = await self._http.post(
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
             return True
         except httpx.HTTPStatusError as exc:
             logger.error(
@@ -373,6 +378,23 @@ class HAClient:
             tts_ok,
             notif_ok,
         )
+
+    async def verify_connectivity(self) -> tuple[bool, str]:
+        """
+        Quick check that the HA REST API is reachable and the token is valid.
+        Returns (True, "") on success or (False, detail) on failure.
+        """
+        url = f"{self.ha_url}/api/"
+        try:
+            resp = await self._http.get(
+                url, headers=self._headers, timeout=_REQUEST_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                return False, "401 Unauthorized — HA token is invalid"
+            resp.raise_for_status()
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
 
     async def dismiss_credential_alert(self) -> None:
         """
