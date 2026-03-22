@@ -32,8 +32,8 @@ JSM alert created / escalated
 
 | JSM Webhook URL | Behaviour |
 |---|---|
-| `https://your-host:8080/alert` | Notify only when on-call |
-| `https://your-host:8080/alert?mode=always` | Always notify regardless of schedule |
+| `https://your-host:8080/alert?key=YOUR_KEY` | Notify only when on-call |
+| `https://your-host:8080/alert?mode=always&key=YOUR_KEY` | Always notify regardless of schedule |
 
 ---
 
@@ -56,7 +56,10 @@ JSM alert created / escalated
 - **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
 - **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
 - **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
+- **API key authentication** — optional `?key=` query parameter for webhook URL authorization
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
+- **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
+- **Safe format templates** — user-configurable announcement formats use a restricted formatter that blocks attribute/index access
 - **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`
 
 ---
@@ -205,7 +208,7 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 | Field | Value |
 |---|---|
 | **Name** | `HA Notifier — On-Call` |
-| **Webhook URL** | `https://your-host/alert` |
+| **Webhook URL** | `https://your-host/alert?key=YOUR_API_KEY` |
 | **Method** | POST |
 | **Send alert payload** | ✅ Enabled |
 | **Alert actions** | Create, EscalateNext, Acknowledge, Close |
@@ -216,19 +219,34 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 | Field | Value |
 |---|---|
 | **Name** | `HA Notifier — Always Notify` |
-| **Webhook URL** | `https://your-host/alert?mode=always` |
+| **Webhook URL** | `https://your-host/alert?mode=always&key=YOUR_API_KEY` |
 | **Method** | POST |
 | **Send alert payload** | ✅ Enabled |
 | **Alert actions** | Create, EscalateNext, Acknowledge, Close |
 | **Teams / Schedules filter** | Your always-notify team/schedule |
 
-### Optional — Webhook Signature (recommended)
+### Optional — API Key Authentication (recommended)
 
-If you set `WEBHOOK_SECRET` in `.env`, add a custom header to each JSM webhook:
+The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and include the key in your JSM webhook URLs:
+
+```
+https://your-host/alert?key=YOUR_API_KEY
+https://your-host/alert?mode=always&key=YOUR_API_KEY
+```
+
+Generate a key: `openssl rand -hex 32`
+
+Requests without a valid `?key=` parameter receive a 401 Unauthorized.
+
+### Optional — HMAC Webhook Signature
+
+For additional security (or as an alternative to API keys), set `WEBHOOK_SECRET` in `.env` and add a custom header to each JSM webhook:
 
 | Header name | Value |
 |---|---|
 | `X-Hub-Signature-256` | `sha256={{ hmac_sha256(body, "YOUR_SECRET") }}` |
+
+You can use **both** `WEBHOOK_API_KEY` and `WEBHOOK_SECRET` together for defense in depth.
 
 > Check the Atlassian JSM documentation for the exact Jinja/template syntax supported in your version's outgoing webhook headers.
 
@@ -570,7 +588,7 @@ The persistent HA notification will be dismissed automatically on the next succe
 
 - [ ] Atlassian API token created with minimum necessary permissions (JSM Ops schedule access)
 - [ ] `.env` is in `.gitignore` and was never committed
-- [ ] `WEBHOOK_SECRET` is set (`openssl rand -hex 32`)
+- [ ] `WEBHOOK_API_KEY` is set (`openssl rand -hex 32`) — or — `WEBHOOK_SECRET` is set (or both)
 - [ ] Service runs as non-root user (handled in Dockerfile)
 - [ ] Container filesystem is read-only (`read_only: true` in compose)
 - [ ] Port 8080 is behind a TLS-terminating reverse proxy or Cloudflare Tunnel before reaching the internet

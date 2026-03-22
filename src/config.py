@@ -120,6 +120,10 @@ class Settings(BaseSettings):
 
     # ── Webhook security ─────────────────────────────────────────────────────
     webhook_secret: str = ""
+    # Optional API key passed as a ?key= query parameter on webhook URLs.
+    # If set, every inbound request to /alert (and /alert/{id}/acknowledge)
+    # must include ?key=<this value> or receive a 401.
+    webhook_api_key: str = ""
 
     # ── Announcement format ─────────────────────────────────────────────────
     # Template for the full (detailed) TTS announcement.  Available placeholders:

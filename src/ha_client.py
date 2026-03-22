@@ -16,6 +16,8 @@ a transient HA outage cannot break the webhook handler.
 from __future__ import annotations
 
 import logging
+import re
+import string
 import urllib.parse
 from typing import Any, Dict, Optional
 
@@ -36,6 +38,42 @@ _PRIORITY_META: Dict[str, tuple[str, str]] = {
 
 # Maximum characters kept from the description inside a TTS message.
 _DESC_MAX_CHARS = 200
+
+
+class _SafeFormatter(string.Formatter):
+    """
+    A restricted str.format() replacement that only allows simple field names.
+
+    Standard ``str.format()`` permits attribute access (``{obj.__class__}``)
+    and index lookups (``{obj[0]}``), which is a potential information-disclosure
+    or DoS vector when the format string comes from user-configurable input
+    (e.g. the .env file).
+
+    This formatter rejects any format field that contains ``.`` or ``[``
+    characters, limiting templates to plain ``{name}`` placeholders only.
+    """
+
+    def get_field(self, field_name: str, args: Any, kwargs: Any) -> Any:
+        # Reject attribute access ({foo.bar}) and index access ({foo[0]}).
+        if "." in field_name or "[" in field_name:
+            raise ValueError(
+                f"Unsafe format field {field_name!r} — "
+                "only simple {{name}} placeholders are allowed"
+            )
+        return super().get_field(field_name, args, kwargs)
+
+
+_safe_fmt = _SafeFormatter()
+
+# Characters that could be interpreted as shell metacharacters, command
+# substitution, or script injection if the TTS text or notification content
+# is ever passed through a shell, template engine, or markup renderer.
+_SHELL_META_RE = re.compile(r'[`$;|&<>{}()\\\x00-\x1f]')
+
+
+def _sanitize(text: str) -> str:
+    """Strip shell metacharacters and control characters from untrusted text."""
+    return _SHELL_META_RE.sub("", text)
 
 
 class HAClient:
@@ -80,27 +118,34 @@ class HAClient:
     # ── Message building ──────────────────────────────────────────────────
 
     def _format_vars(self, alert: Any, action: str) -> Dict[str, str]:
-        """Return the common template variables for announcement formats."""
+        """Return the common template variables for announcement formats.
+
+        All alert-sourced fields are sanitized to strip shell metacharacters
+        and control characters before they reach TTS or notification output.
+        """
         spoken_priority, _ = _PRIORITY_META.get(
             alert.priority, ("Unknown priority", "⚠️")
         )
         action_prefix = "Escalated alert!" if action == "EscalateNext" else "Attention!"
 
-        entity_part = f" System: {alert.entity}." if alert.entity else ""
+        message = _sanitize(alert.message)
+        entity = _sanitize(alert.entity) if alert.entity else ""
+        description = _sanitize(alert.description)[:_DESC_MAX_CHARS] if alert.description else ""
 
+        entity_part = f" System: {entity}." if entity else ""
         description_part = ""
-        if alert.description:
-            desc = alert.description[:_DESC_MAX_CHARS]
-            if len(alert.description) > _DESC_MAX_CHARS:
+        if description:
+            desc = description
+            if alert.description and len(alert.description) > _DESC_MAX_CHARS:
                 desc += "..."
             description_part = f" Details: {desc}."
 
         return {
             "action_prefix": action_prefix,
             "priority": spoken_priority,
-            "message": alert.message,
-            "entity": alert.entity or "",
-            "description": (alert.description or "")[:_DESC_MAX_CHARS],
+            "message": message,
+            "entity": entity,
+            "description": description,
             "entity_part": entity_part,
             "description_part": description_part,
         }
@@ -108,25 +153,26 @@ class HAClient:
     def _build_tts_text(self, alert: Any, action: str) -> str:
         """Compose the spoken TTS announcement using the configured format."""
         variables = self._format_vars(alert, action)
-        return self.announcement_format.format(**variables)
+        return _safe_fmt.format(self.announcement_format, **variables)
 
     def _build_terse_tts_text(self, alert: Any, action: str) -> str:
         """Compose a short TTS announcement using the terse format."""
         variables = self._format_vars(alert, action)
-        return self.terse_announcement_format.format(**variables)
+        return _safe_fmt.format(self.terse_announcement_format, **variables)
 
     def _build_media_metadata(self, alert: Any, action: str) -> Dict[str, Any]:
         """Build the rich metadata block shown in the HA media player UI."""
         _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
 
-        title = f"{emoji} {alert.priority}: {alert.message}"
+        message = _sanitize(alert.message)
+        title = f"{emoji} {alert.priority}: {message}"
         if action == "EscalateNext":
             title = f"⬆️ ESCALATED — {title}"
         if len(title) > 80:
             title = title[:77] + "…"
 
         artist = self.notifier_label
-        album = alert.entity or "JSM Alert"
+        album = _sanitize(alert.entity) if alert.entity else "JSM Alert"
 
         return {
             "title": title,
@@ -284,7 +330,7 @@ class HAClient:
         """
         Create (or replace) a persistent notification in HA for the alert.
         Uses the alertId as notification_id so re-deliveries update rather
-        than duplicate.
+        than duplicate.  All alert-sourced text is sanitized.
         """
         _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
 
@@ -292,13 +338,18 @@ class HAClient:
         if action == "EscalateNext":
             title = f"⬆️ ESCALATED — {title}"
 
-        lines = [f"**{alert.message}**", ""]
-        if alert.entity:
-            lines.append(f"**System:** {alert.entity}")
-        if alert.source:
-            lines.append(f"**Source:** {alert.source}")
-        if alert.description:
-            lines.append(f"\n{alert.description}")
+        message = _sanitize(alert.message)
+        entity = _sanitize(alert.entity) if alert.entity else ""
+        source = _sanitize(alert.source) if alert.source else ""
+        description = _sanitize(alert.description) if alert.description else ""
+
+        lines = [f"**{message}**", ""]
+        if entity:
+            lines.append(f"**System:** {entity}")
+        if source:
+            lines.append(f"**Source:** {source}")
+        if description:
+            lines.append(f"\n{description}")
 
         payload = {
             "notification_id": f"jsm_alert_{alert.alertId}",

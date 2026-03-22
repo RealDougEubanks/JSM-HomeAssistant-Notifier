@@ -36,9 +36,14 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import re
+import secrets
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
+
+# Maximum allowed request body size (1 MB).  JSM webhook payloads are typically
+# a few KB; anything larger is likely malicious or malformed.
+_MAX_BODY_BYTES = 1_048_576
 
 from .alert_processor import AlertProcessor
 from .config import Settings
@@ -198,6 +203,20 @@ def _verify_signature(request: Request, body: bytes) -> bool:
         return False
 
 
+def _verify_api_key(key: Optional[str]) -> bool:
+    """
+    Check the ``?key=`` query parameter against WEBHOOK_API_KEY.
+    Returns True if no key is configured (disabled) or if the key matches.
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    if not _settings.webhook_api_key:
+        return True
+    if not key:
+        logger.warning("Request rejected — missing ?key= parameter")
+        return False
+    return secrets.compare_digest(key, _settings.webhook_api_key)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
@@ -272,6 +291,10 @@ async def acknowledge_alert(
         ...,
         description="JSM alert ID (alphanumeric, hyphens, underscores; max 200 chars)",
     ),
+    key: Optional[str] = Query(
+        default=None,
+        description="API key for authentication (must match WEBHOOK_API_KEY).",
+    ),
 ):
     """
     Acknowledge a JSM alert by alert ID.
@@ -281,8 +304,11 @@ async def acknowledge_alert(
     needing to open the JSM web UI.
 
     Returns 200 with ``{"alert_id": ..., "acknowledged": true}`` on success,
-    400 for invalid alert IDs, or 502 if the JSM API call fails.
+    400 for invalid alert IDs, 401 for bad API key, or 502 if the JSM API call fails.
     """
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
     if not _ALERT_ID_RE.match(alert_id):
         raise HTTPException(status_code=400, detail="Invalid alert_id format")
 
@@ -314,15 +340,30 @@ async def receive_alert(
             "Use this for schedules like Internal Systems_schedule."
         ),
     ),
+    key: Optional[str] = Query(
+        default=None,
+        description="API key for webhook authentication (must match WEBHOOK_API_KEY).",
+    ),
 ):
     """
     Main JSM / OpsGenie inbound webhook endpoint.
 
     Configure two webhook URLs in JSM:
-      • https://<your-host>/alert              → on-call check before notifying
-      • https://<your-host>/alert?mode=always  → always notify (Internal Systems)
+      • https://<your-host>/alert?key=YOUR_KEY               → on-call check
+      • https://<your-host>/alert?mode=always&key=YOUR_KEY   → always notify
     """
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
     body = await request.body()
+
+    if len(body) > _MAX_BODY_BYTES:
+        logger.warning(
+            "Rejecting oversized request body (%d bytes) from %s",
+            len(body),
+            request.client.host if request.client else "unknown",
+        )
+        raise HTTPException(status_code=413, detail="Request body too large")
 
     if not _verify_signature(request, body):
         logger.warning(
@@ -335,7 +376,7 @@ async def receive_alert(
         payload = JSMWebhookPayload.model_validate_json(body)
     except Exception as exc:
         logger.error("Failed to parse JSM webhook payload: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid payload format") from exc
 
     always_notify = mode == "always"
 
