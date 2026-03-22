@@ -144,9 +144,44 @@ class Settings(BaseSettings):
     silent_window: str = ""
     terse_window: str = ""
 
+    # Priorities that override silent mode (always play TTS even during
+    # silent windows).  Comma-separated, e.g. "P1" or "P1,P2".
+    silent_window_override_priorities: str = ""
+
     # Parsed window lists — populated by the model validator below.
     _silent_windows: list[Window] = []
     _terse_windows: list[Window] = []
+
+    # ── Media player routing ─────────────────────────────────────────────
+    # Route TTS to different speakers by time of day.
+    # Format: entity@HH:MM-HH:MM pairs, comma-separated.
+    # If the current time matches a routing entry, that player is used.
+    # Falls back to HA_MEDIA_PLAYER_ENTITY if no routing entry matches.
+    # Example: media_player.bedroom@22:00-08:00, media_player.office@08:00-18:00
+    ha_media_player_routing: str = ""
+
+    # ── Volume control ───────────────────────────────────────────────────
+    # Volume levels (0.0–1.0) applied before TTS playback.
+    # Set to empty string to skip volume adjustment entirely (use player's
+    # current volume).
+    ha_volume_default: str = ""
+    # Volume used during terse time windows.
+    ha_volume_terse: str = ""
+
+    # ── Alert batching ───────────────────────────────────────────────────
+    # When multiple alerts fire within this many seconds, combine them into
+    # a single TTS announcement.  Set to 0 to disable batching (default).
+    alert_batch_window_seconds: int = 0
+
+    # ── TTS repeat (pager mode) ──────────────────────────────────────────
+    # For critical alerts, repeat the TTS announcement at intervals until
+    # acknowledged or closed in JSM.
+    # Seconds between repeats (0 = disabled, default).
+    tts_repeat_interval_seconds: int = 0
+    # Maximum number of repeats before giving up.
+    tts_repeat_max: int = 5
+    # Which priorities trigger repeats.  Comma-separated, e.g. "P1" or "P1,P2".
+    tts_repeat_priorities: str = "P1"
 
     # ── Tuning ───────────────────────────────────────────────────────────────
     oncall_cache_ttl_seconds: int = 300
@@ -166,7 +201,7 @@ class Settings(BaseSettings):
         return v  # type: ignore[return-value]
 
     @model_validator(mode="after")
-    def _parse_time_windows(self) -> "Settings":
+    def _parse_derived_fields(self) -> "Settings":
         object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
         object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
         return self

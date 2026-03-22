@@ -30,9 +30,12 @@ def _make_processor(
     jsm.invalidate_oncall_cache = MagicMock()
 
     ha = MagicMock(spec=HAClient)
+    ha.media_player = settings.ha_media_player_entity
     ha.play_tts_alert = AsyncMock(return_value=True)
+    ha.play_tts_batch = AsyncMock(return_value=True)
     ha.send_persistent_notification = AsyncMock(return_value=True)
     ha.dismiss_notification = AsyncMock(return_value=True)
+    ha._set_volume = AsyncMock(return_value=True)
 
     return AlertProcessor(settings, jsm, ha)
 

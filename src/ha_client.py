@@ -53,6 +53,8 @@ class HAClient:
             "Alert: {message}.{entity_part}{description_part}"
         ),
         terse_announcement_format: str = "{action_prefix} {priority} alert. {message}.",
+        volume_default: Optional[float] = None,
+        volume_terse: Optional[float] = None,
     ) -> None:
         self.ha_url = ha_url.rstrip("/")
         self.media_player = media_player
@@ -62,6 +64,8 @@ class HAClient:
         self.notifier_label = notifier_label  # shown as "artist" in media player UI
         self.announcement_format = announcement_format
         self.terse_announcement_format = terse_announcement_format
+        self.volume_default = volume_default
+        self.volume_terse = volume_terse
         self._headers = {
             "Authorization": f"Bearer {ha_token}",
             "Content-Type": "application/json",
@@ -165,15 +169,34 @@ class HAClient:
             logger.error("HA service call %s.%s error: %s", domain, service, exc)
         return False
 
+    async def _set_volume(self, entity_id: str, volume: float) -> bool:
+        """Set volume on a media player entity (0.0–1.0)."""
+        payload = {"entity_id": entity_id, "volume_level": volume}
+        logger.info("Setting volume on %s to %.2f", entity_id, volume)
+        return await self._call_service("media_player", "volume_set", payload)
+
     async def play_tts_alert(
-        self, alert: Any, action: str = "Create", *, terse: bool = False,
+        self,
+        alert: Any,
+        action: str = "Create",
+        *,
+        terse: bool = False,
+        target_entity: Optional[str] = None,
     ) -> bool:
         """
         Play a TTS announcement on the configured media player with rich
         metadata so the player displays the actual alert title.
 
         If *terse* is True, the short announcement format is used.
+        If *target_entity* is given, play on that entity instead of the default.
         """
+        entity = target_entity or self.media_player
+
+        # Set volume before playback if configured.
+        volume = self.volume_terse if terse and self.volume_terse is not None else self.volume_default
+        if volume is not None:
+            await self._set_volume(entity, volume)
+
         if terse:
             tts_text = self._build_terse_tts_text(alert, action)
         else:
@@ -182,7 +205,7 @@ class HAClient:
         metadata = self._build_media_metadata(alert, action)
 
         payload: Dict[str, Any] = {
-            "entity_id": self.media_player,
+            "entity_id": entity,
             "media_content_id": content_id,
             "media_content_type": "provider",
             "extra": {
@@ -204,10 +227,50 @@ class HAClient:
         }
 
         logger.info(
-            "Playing TTS: entity=%s title=%r",
-            self.media_player,
+            "Playing TTS: entity=%s title=%r terse=%s",
+            entity,
             metadata["title"],
+            terse,
         )
+        return await self._call_service("media_player", "play_media", payload)
+
+    async def play_tts_batch(
+        self, alerts: list[Any], actions: list[str], *, target_entity: Optional[str] = None,
+    ) -> bool:
+        """Play a batched announcement for multiple alerts."""
+        entity = target_entity or self.media_player
+        if self.volume_default is not None:
+            await self._set_volume(entity, self.volume_default)
+
+        parts = [f"{len(alerts)} new alerts."]
+        for alert, action in zip(alerts, actions):
+            variables = self._format_vars(alert, action)
+            parts.append(f"{variables['priority']}: {alert.message}.")
+
+        tts_text = " ".join(parts)
+        content_id = self._build_tts_content_id(tts_text)
+
+        # Use the first alert for metadata display.
+        metadata = self._build_media_metadata(alerts[0], actions[0])
+        metadata["title"] = f"Batch: {len(alerts)} alerts"
+
+        payload: Dict[str, Any] = {
+            "entity_id": entity,
+            "media_content_id": content_id,
+            "media_content_type": "provider",
+            "extra": {
+                "metadata": {
+                    **metadata,
+                    "navigateIds": [
+                        {},
+                        {"media_content_type": "app", "media_content_id": "media-source://tts"},
+                        {"media_content_type": "provider", "media_content_id": content_id},
+                    ],
+                }
+            },
+        }
+
+        logger.info("Playing batched TTS for %d alerts on %s", len(alerts), entity)
         return await self._call_service("media_player", "play_media", payload)
 
     async def send_persistent_notification(

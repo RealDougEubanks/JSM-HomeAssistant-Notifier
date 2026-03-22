@@ -5,7 +5,13 @@ from datetime import time
 
 import pytest
 
-from src.time_windows import in_any_window, in_window, parse_windows
+from src.time_windows import (
+    in_any_window,
+    in_window,
+    parse_player_routing,
+    parse_windows,
+    resolve_player,
+)
 
 
 # ── parse_windows ────────────────────────────────────────────────────────────
@@ -126,3 +132,46 @@ def test_in_any_matches_second_window():
 def test_in_any_no_match():
     windows = [(time(9, 0), time(12, 0)), (time(14, 0), time(18, 0))]
     assert in_any_window(time(13, 0), windows) is False
+
+
+# ── parse_player_routing ─────────────────────────────────────────────────────
+
+def test_parse_routing_empty():
+    assert parse_player_routing("") == []
+
+
+def test_parse_routing_single():
+    routes = parse_player_routing("media_player.bedroom@22:00-08:00")
+    assert len(routes) == 1
+    assert routes[0][0] == "media_player.bedroom"
+    assert routes[0][1] == (time(22, 0), time(8, 0))
+
+
+def test_parse_routing_multiple():
+    routes = parse_player_routing(
+        "media_player.bedroom@22:00-08:00, media_player.office@08:00-18:00"
+    )
+    assert len(routes) == 2
+    assert routes[0][0] == "media_player.bedroom"
+    assert routes[1][0] == "media_player.office"
+
+
+def test_parse_routing_invalid_no_at():
+    with pytest.raises(ValueError, match="Invalid routing entry"):
+        parse_player_routing("media_player.bedroom")
+
+
+# ── resolve_player ───────────────────────────────────────────────────────────
+
+def test_resolve_player_matches():
+    routes = [("media_player.bedroom", (time(22, 0), time(8, 0)))]
+    assert resolve_player(time(23, 0), routes, "media_player.default") == "media_player.bedroom"
+
+
+def test_resolve_player_falls_back():
+    routes = [("media_player.bedroom", (time(22, 0), time(8, 0)))]
+    assert resolve_player(time(12, 0), routes, "media_player.default") == "media_player.default"
+
+
+def test_resolve_player_empty_routes():
+    assert resolve_player(time(12, 0), [], "media_player.default") == "media_player.default"

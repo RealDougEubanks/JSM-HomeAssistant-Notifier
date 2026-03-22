@@ -216,6 +216,36 @@ class JSMClient:
             logger.error("Credential check failed: %s", msg)
             return False, msg
 
+    async def acknowledge_alert(self, alert_id: str) -> tuple[bool, str]:
+        """
+        Acknowledge an alert via the JSM Ops API.
+
+        Returns (True, "") on success, or (False, error_detail) on failure.
+        """
+        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}/acknowledge"
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.post(
+                    url,
+                    auth=self._auth,
+                    headers={**self._base_headers(), "Content-Type": "application/json"},
+                    json={"user": self.my_user_id},
+                    timeout=_REQUEST_TIMEOUT,
+                )
+            if response.status_code in (200, 202):
+                logger.info("Alert %s acknowledged via JSM API", alert_id)
+                return True, ""
+            response.raise_for_status()
+            return True, ""
+        except httpx.HTTPStatusError as exc:
+            msg = f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
+            return False, msg
+        except Exception as exc:
+            msg = str(exc)
+            logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
+            return False, msg
+
     def invalidate_oncall_cache(self) -> None:
         """Force the next on-call check to hit the API (useful after rotation)."""
         self._oncall_cache.clear()

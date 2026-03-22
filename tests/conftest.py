@@ -85,4 +85,6 @@ def ha_client(settings: Settings) -> HAClient:
         tts_voice=settings.ha_tts_voice,
         announcement_format=settings.announcement_format,
         terse_announcement_format=settings.terse_announcement_format,
+        volume_default=float(settings.ha_volume_default) if settings.ha_volume_default else None,
+        volume_terse=float(settings.ha_volume_terse) if settings.ha_volume_terse else None,
     )

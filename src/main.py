@@ -79,6 +79,8 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         notifier_label=settings.ha_notifier_label,
         announcement_format=settings.announcement_format,
         terse_announcement_format=settings.terse_announcement_format,
+        volume_default=float(settings.ha_volume_default) if settings.ha_volume_default else None,
+        volume_terse=float(settings.ha_volume_terse) if settings.ha_volume_terse else None,
     )
 
     processor = AlertProcessor(settings, jsm_client, ha_client)
@@ -210,6 +212,26 @@ async def invalidate_cache():
     """Force the next on-call check to query JSM instead of using cached data."""
     _processor.jsm_client.invalidate_oncall_cache()
     return {"status": "cache invalidated"}
+
+
+@app.post("/alert/{alert_id}/acknowledge", tags=["webhook"])
+async def acknowledge_alert(alert_id: str):
+    """
+    Acknowledge a JSM alert by alert ID.
+
+    Intended for use from HA automations — e.g. a button on the dashboard or a
+    voice command that calls this endpoint to acknowledge the alert without
+    needing to open the JSM web UI.
+    """
+    success, error = await _processor.jsm_client.acknowledge_alert(alert_id)
+    if success:
+        # Also dismiss the persistent notification and stop TTS repeats.
+        await _processor.ha_client.dismiss_notification(alert_id)
+        _processor.cancel_tts_repeat(alert_id)
+        logger.info("Alert %s acknowledged via API", alert_id)
+        return {"alert_id": alert_id, "acknowledged": True}
+    logger.error("Failed to acknowledge alert %s: %s", alert_id, error)
+    raise HTTPException(status_code=502, detail=f"JSM acknowledge failed: {error}")
 
 
 @app.post("/alert", tags=["webhook"])
