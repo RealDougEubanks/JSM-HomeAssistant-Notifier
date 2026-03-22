@@ -77,6 +77,8 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         tts_language=settings.ha_tts_language,
         tts_voice=settings.ha_tts_voice,
         notifier_label=settings.ha_notifier_label,
+        announcement_format=settings.announcement_format,
+        terse_announcement_format=settings.terse_announcement_format,
     )
 
     processor = AlertProcessor(settings, jsm_client, ha_client)

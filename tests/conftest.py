@@ -83,4 +83,6 @@ def ha_client(settings: Settings) -> HAClient:
         tts_service=settings.ha_tts_service,
         tts_language=settings.ha_tts_language,
         tts_voice=settings.ha_tts_voice,
+        announcement_format=settings.announcement_format,
+        terse_announcement_format=settings.terse_announcement_format,
     )

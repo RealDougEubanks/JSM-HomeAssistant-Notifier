@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any, List, Tuple, Type
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -29,6 +29,8 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+from .time_windows import Window, parse_windows
 
 # Fields that accept plain comma-separated strings in addition to JSON arrays.
 _CSV_FIELDS = frozenset({"always_notify_schedule_names", "check_oncall_schedule_names"})
@@ -119,6 +121,33 @@ class Settings(BaseSettings):
     # ── Webhook security ─────────────────────────────────────────────────────
     webhook_secret: str = ""
 
+    # ── Announcement format ─────────────────────────────────────────────────
+    # Template for the full (detailed) TTS announcement.  Available placeholders:
+    #   {action_prefix}  – "Escalated alert!" or "Attention!"
+    #   {priority}       – e.g. "Priority 1, Critical"
+    #   {message}        – alert title / summary
+    #   {entity}         – system / host name (empty string if absent)
+    #   {description}    – truncated description (empty string if absent)
+    announcement_format: str = (
+        "{action_prefix} {priority} alert from Jira Service Management. "
+        "Alert: {message}.{entity_part}{description_part}"
+    )
+
+    # Template for terse (short) announcements during terse windows.
+    terse_announcement_format: str = "{action_prefix} {priority} alert. {message}."
+
+    # ── Time windows (quiet hours) ───────────────────────────────────────
+    # Comma-separated HH:MM-HH:MM windows.  Cross-midnight is supported.
+    # During silent windows, no TTS is played (persistent notification only).
+    # During terse windows, only the terse format is spoken.
+    # Leave empty to disable.
+    silent_window: str = ""
+    terse_window: str = ""
+
+    # Parsed window lists — populated by the model validator below.
+    _silent_windows: list[Window] = []
+    _terse_windows: list[Window] = []
+
     # ── Tuning ───────────────────────────────────────────────────────────────
     oncall_cache_ttl_seconds: int = 300
     alert_dedup_ttl_seconds: int = 60
@@ -135,6 +164,12 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return _parse_csv_or_json("always_notify_schedule_names", v)  # type: ignore[arg-type]
         return v  # type: ignore[return-value]
+
+    @model_validator(mode="after")
+    def _parse_time_windows(self) -> "Settings":
+        object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
+        object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
+        return self
 
     # ── Custom sources ────────────────────────────────────────────────────────
     @classmethod

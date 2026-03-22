@@ -29,12 +29,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 from .config import Settings
 from .ha_client import HAClient
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
+from .time_windows import in_any_window
 
 logger = logging.getLogger(__name__)
 
@@ -191,25 +193,55 @@ class AlertProcessor:
             )
             return result
 
-        # ── Send notifications concurrently ───────────────────────────────
-        tts_result, notif_result = await asyncio.gather(
-            self.ha_client.play_tts_alert(payload.alert, payload.action),
-            self.ha_client.send_persistent_notification(
-                payload.alert, payload.action
-            ),
-            return_exceptions=True,
+        # ── Determine announcement verbosity based on time windows ─────────
+        now_time = datetime.now().time()
+        silent = in_any_window(now_time, self.settings._silent_windows)
+        terse = (
+            not silent
+            and in_any_window(now_time, self.settings._terse_windows)
         )
 
-        if isinstance(tts_result, Exception):
-            logger.error("TTS call raised: %s", tts_result)
-        if isinstance(notif_result, Exception):
-            logger.error("Persistent notification raised: %s", notif_result)
+        if silent:
+            result["announcement_mode"] = "silent"
+            logger.info(
+                "Silent window active — suppressing TTS for alert %s",
+                payload.alert.alertId,
+            )
+        elif terse:
+            result["announcement_mode"] = "terse"
+            logger.info(
+                "Terse window active — using short announcement for alert %s",
+                payload.alert.alertId,
+            )
+        else:
+            result["announcement_mode"] = "full"
+
+        # ── Send notifications concurrently ───────────────────────────────
+        coros = []
+        if not silent:
+            coros.append(
+                self.ha_client.play_tts_alert(
+                    payload.alert, payload.action, terse=terse,
+                )
+            )
+        # Persistent notification is always sent (visible in dashboard).
+        coros.append(
+            self.ha_client.send_persistent_notification(
+                payload.alert, payload.action
+            )
+        )
+
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error("Notification call raised: %s", r)
 
         result["notified"] = True
         logger.info(
-            "Notification sent — alert_id=%s action=%s reason=%s",
+            "Notification sent — alert_id=%s action=%s reason=%s mode=%s",
             payload.alert.alertId,
             payload.action,
             reason,
+            result["announcement_mode"],
         )
         return result

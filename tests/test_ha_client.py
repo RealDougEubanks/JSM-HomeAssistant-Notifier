@@ -45,7 +45,7 @@ def test_media_metadata_p1(ha_client: HAClient):
     assert "🔴" in meta["title"]
     assert "P1" in meta["title"]
     assert "DB Down" in meta["title"]
-    assert meta["artist"] == "JSM — Atlantic BT"
+    assert meta["artist"] == "JSM Alert Notifier"
 
 
 def test_media_metadata_escalation_prefix(ha_client: HAClient):

@@ -48,6 +48,11 @@ class HAClient:
         tts_language: str,
         tts_voice: str,
         notifier_label: str = "JSM Alert Notifier",
+        announcement_format: str = (
+            "{action_prefix} {priority} alert from Jira Service Management. "
+            "Alert: {message}.{entity_part}{description_part}"
+        ),
+        terse_announcement_format: str = "{action_prefix} {priority} alert. {message}.",
     ) -> None:
         self.ha_url = ha_url.rstrip("/")
         self.media_player = media_player
@@ -55,6 +60,8 @@ class HAClient:
         self.tts_language = tts_language    # e.g. "en-US"
         self.tts_voice = tts_voice          # e.g. "JennyNeural"
         self.notifier_label = notifier_label  # shown as "artist" in media player UI
+        self.announcement_format = announcement_format
+        self.terse_announcement_format = terse_announcement_format
         self._headers = {
             "Authorization": f"Bearer {ha_token}",
             "Content-Type": "application/json",
@@ -62,34 +69,41 @@ class HAClient:
 
     # ── Message building ──────────────────────────────────────────────────
 
-    def _build_tts_text(self, alert: Any, action: str) -> str:
-        """Compose the spoken TTS announcement."""
+    def _format_vars(self, alert: Any, action: str) -> Dict[str, str]:
+        """Return the common template variables for announcement formats."""
         spoken_priority, _ = _PRIORITY_META.get(
             alert.priority, ("Unknown priority", "⚠️")
         )
+        action_prefix = "Escalated alert!" if action == "EscalateNext" else "Attention!"
 
-        parts: list[str] = []
+        entity_part = f" System: {alert.entity}." if alert.entity else ""
 
-        if action == "EscalateNext":
-            parts.append("Escalated alert!")
-        else:
-            parts.append("Attention!")
-
-        parts.append(
-            f"{spoken_priority} alert from Jira Service Management."
-        )
-        parts.append(f"Alert: {alert.message}.")
-
-        if alert.entity:
-            parts.append(f"System: {alert.entity}.")
-
+        description_part = ""
         if alert.description:
             desc = alert.description[:_DESC_MAX_CHARS]
             if len(alert.description) > _DESC_MAX_CHARS:
                 desc += "..."
-            parts.append(f"Details: {desc}.")
+            description_part = f" Details: {desc}."
 
-        return " ".join(parts)
+        return {
+            "action_prefix": action_prefix,
+            "priority": spoken_priority,
+            "message": alert.message,
+            "entity": alert.entity or "",
+            "description": (alert.description or "")[:_DESC_MAX_CHARS],
+            "entity_part": entity_part,
+            "description_part": description_part,
+        }
+
+    def _build_tts_text(self, alert: Any, action: str) -> str:
+        """Compose the spoken TTS announcement using the configured format."""
+        variables = self._format_vars(alert, action)
+        return self.announcement_format.format(**variables)
+
+    def _build_terse_tts_text(self, alert: Any, action: str) -> str:
+        """Compose a short TTS announcement using the terse format."""
+        variables = self._format_vars(alert, action)
+        return self.terse_announcement_format.format(**variables)
 
     def _build_media_metadata(self, alert: Any, action: str) -> Dict[str, Any]:
         """Build the rich metadata block shown in the HA media player UI."""
@@ -151,12 +165,19 @@ class HAClient:
             logger.error("HA service call %s.%s error: %s", domain, service, exc)
         return False
 
-    async def play_tts_alert(self, alert: Any, action: str = "Create") -> bool:
+    async def play_tts_alert(
+        self, alert: Any, action: str = "Create", *, terse: bool = False,
+    ) -> bool:
         """
         Play a TTS announcement on the configured media player with rich
         metadata so the player displays the actual alert title.
+
+        If *terse* is True, the short announcement format is used.
         """
-        tts_text = self._build_tts_text(alert, action)
+        if terse:
+            tts_text = self._build_terse_tts_text(alert, action)
+        else:
+            tts_text = self._build_tts_text(alert, action)
         content_id = self._build_tts_content_id(tts_text)
         metadata = self._build_media_metadata(alert, action)
 
