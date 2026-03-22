@@ -200,6 +200,29 @@ class Settings(BaseSettings):
     # An HA notification + TTS announcement fires if the check fails.
     token_check_interval_hours: int = 24
 
+    # ── HA automation webhooks ────────────────────────────────────────────
+    # Webhook IDs fired on HA for specific alert lifecycle events.
+    # These trigger HA automations (flash lights, change colors, etc.).
+    # Each value is a webhook ID or comma-separated list of webhook IDs.
+    # Leave empty to disable.
+    ha_webhook_on_create: str = ""
+    ha_webhook_on_escalate: str = ""
+    ha_webhook_on_acknowledge: str = ""
+    ha_webhook_on_close: str = ""
+    ha_webhook_on_update: str = ""
+    ha_webhook_on_sla_breach: str = ""
+
+    # ── Incident dashboard ────────────────────────────────────────────────
+    # Enable the incident state dashboard (GET /incidents).
+    # Tracks open/closed incidents in a SQLite database.
+    incident_dashboard_enabled: bool = False
+    # Path to the SQLite database file.  Use /tmp for ephemeral storage
+    # or mount a volume for persistence across container restarts.
+    incident_db_path: str = "/tmp/incidents.db"
+    # How often (minutes) to sync open incidents from JSM.
+    # Set to 0 to disable background sync (only updates from webhooks).
+    incident_sync_interval_minutes: int = 0
+
     # ── Validators ───────────────────────────────────────────────────────────
     # These run when values arrive via __init__ kwargs (e.g. in tests).
     # The custom sources above handle the same conversion for .env / env vars.

@@ -249,6 +249,31 @@ class JSMClient:
             logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
             return False, msg
 
+    async def list_open_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Fetch open alerts from the JSM Ops API.
+
+        Returns a list of alert dicts suitable for ``IncidentStore.bulk_upsert``.
+        On failure returns an empty list (non-fatal).
+        """
+        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts"
+        try:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                params={"limit": limit, "order": "desc", "sort": "createdAt"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            alerts = data.get("data") or data.get("values") or []
+            logger.info("Fetched %d alerts from JSM API", len(alerts))
+            return alerts  # type: ignore[return-value]
+        except Exception as exc:
+            logger.error("Failed to fetch alerts from JSM: %s", exc)
+            return []
+
     def invalidate_oncall_cache(self) -> None:
         """Force the next on-call check to hit the API (useful after rotation)."""
         self._oncall_cache.clear()

@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Settings
 from .ha_client import HAClient
+from .incident_store import IncidentStore
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
 from .time_windows import in_any_window, parse_player_routing, resolve_player
@@ -50,6 +51,19 @@ _MAX_DEDUP_CACHE_SIZE = 10_000
 # Actions that should dismiss the persistent HA notification.
 _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 
+# Map JSM action names to HA automation webhook config field names.
+_ACTION_WEBHOOK_MAP: Dict[str, str] = {
+    "Create":        "ha_webhook_on_create",
+    "EscalateNext":  "ha_webhook_on_escalate",
+    "Acknowledge":   "ha_webhook_on_acknowledge",
+    "Close":         "ha_webhook_on_close",
+    "AddNote":       "ha_webhook_on_update",
+    "UnAcknowledge": "ha_webhook_on_update",
+    "AssignOwnership": "ha_webhook_on_update",
+    "Seen":          "ha_webhook_on_update",
+    "SlaBreached":   "ha_webhook_on_sla_breach",
+}
+
 
 def _parse_priority_set(raw: str) -> frozenset[str]:
     """Parse a comma-separated priority string like 'P1,P2' into a frozenset."""
@@ -64,10 +78,12 @@ class AlertProcessor:
         settings: Settings,
         jsm_client: JSMClient,
         ha_client: HAClient,
+        incident_store: Optional[IncidentStore] = None,
     ) -> None:
         self.settings = settings
         self.jsm_client = jsm_client
         self.ha_client = ha_client
+        self.incident_store = incident_store
         # alert_key → epoch timestamp of last processing
         self._dedup_cache: Dict[str, float] = {}
 
@@ -305,6 +321,36 @@ class AlertProcessor:
         await asyncio.sleep(self.settings.alert_batch_window_seconds)
         await self._flush_batch()
 
+    # ── HA automation webhooks ───────────────────────────────────────────
+
+    async def _fire_automation_webhooks(self, payload: JSMWebhookPayload) -> None:
+        """Fire HA automation webhook(s) for the given action, if configured."""
+        config_field = _ACTION_WEBHOOK_MAP.get(payload.action)
+        if not config_field:
+            return
+
+        webhook_ids = getattr(self.settings, config_field, "")
+        if not webhook_ids or not webhook_ids.strip():
+            return
+
+        # Build the data payload passed to HA as trigger variables.
+        data = {
+            "event": payload.action,
+            "alert_id": payload.alert.alertId,
+            "message": payload.alert.message,
+            "priority": payload.alert.priority,
+            "entity": payload.alert.entity or "",
+            "description": (payload.alert.description or "")[:200],
+            "source": payload.alert.source or "",
+            "tags": payload.alert.tags,
+        }
+
+        logger.info(
+            "Firing HA automation webhook(s) for action=%s alert_id=%s",
+            payload.action, payload.alert.alertId,
+        )
+        await self.ha_client.fire_webhooks(webhook_ids, data)
+
     # ── Public entry point ────────────────────────────────────────────────
 
     async def process(
@@ -323,6 +369,24 @@ class AlertProcessor:
             "dismissed": False,
             "reason":   "",
         }
+
+        # ── Fire HA automation webhooks (for ALL actions) ─────────────────
+        await self._fire_automation_webhooks(payload)
+
+        # ── Update incident store (for ALL actions) ───────────────────────
+        if self.incident_store:
+            try:
+                alert_dict = {
+                    "alertId": payload.alert.alertId,
+                    "message": payload.alert.message,
+                    "priority": payload.alert.priority,
+                    "entity": payload.alert.entity or "",
+                    "description": payload.alert.description or "",
+                    "source": payload.alert.source or "",
+                }
+                await self.incident_store.upsert(alert_dict, payload.action)
+            except Exception as exc:
+                logger.error("Failed to update incident store: %s", exc)
 
         # ── Dismiss on close / ack ────────────────────────────────────────
         if payload.action in _DISMISS_ACTIONS:

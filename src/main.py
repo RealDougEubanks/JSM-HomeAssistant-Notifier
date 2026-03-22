@@ -48,6 +48,7 @@ _MAX_BODY_BYTES = 1_048_576
 from .alert_processor import AlertProcessor
 from .config import Settings
 from .ha_client import HAClient
+from .incident_store import IncidentStore
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
 
@@ -64,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 # ── Application bootstrap ─────────────────────────────────────────────────────
 
-def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
+def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentStore]]:
     settings = Settings()  # Reads from .env / env vars
 
     jsm_client = JSMClient(
@@ -91,7 +92,35 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         enable_emojis=settings.enable_emojis,
     )
 
-    processor = AlertProcessor(settings, jsm_client, ha_client)
+    # ── Incident dashboard (optional) ────────────────────────────────────
+    incident_store: Optional[IncidentStore] = None
+    if settings.incident_dashboard_enabled:
+        incident_store = IncidentStore(settings.incident_db_path)
+        logger.info(
+            "Incident dashboard enabled — db=%s sync=%dm",
+            settings.incident_db_path,
+            settings.incident_sync_interval_minutes,
+        )
+
+    processor = AlertProcessor(settings, jsm_client, ha_client, incident_store)
+
+    async def _incident_sync_loop() -> None:
+        """Background task: periodically sync open alerts from JSM."""
+        interval = settings.incident_sync_interval_minutes * 60
+        if interval <= 0 or not incident_store:
+            return
+        # Initial delay to let the service boot cleanly.
+        await asyncio.sleep(60)
+        while True:
+            try:
+                logger.info("Running scheduled JSM incident sync…")
+                alerts = await jsm_client.list_open_alerts()
+                if alerts:
+                    count = await incident_store.bulk_upsert(alerts)
+                    logger.info("Incident sync: upserted %d alert(s)", count)
+            except Exception as exc:
+                logger.error("Incident sync failed: %s", exc)
+            await asyncio.sleep(interval)
 
     async def _credential_check_loop() -> None:
         """
@@ -145,18 +174,31 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         else:
             logger.warning("Startup check: HA API — FAILED (%s)", ha_err)
 
-        task = asyncio.create_task(_credential_check_loop())
+        cred_task = asyncio.create_task(_credential_check_loop())
+        sync_task = (
+            asyncio.create_task(_incident_sync_loop())
+            if incident_store and settings.incident_sync_interval_minutes > 0
+            else None
+        )
         try:
             yield
         finally:
-            task.cancel()
+            cred_task.cancel()
             try:
-                await task
+                await cred_task
             except asyncio.CancelledError:
                 pass
-            # Close persistent HTTP clients.
+            if sync_task:
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
+            # Close persistent HTTP clients and stores.
             await jsm_client.aclose()
             await ha_client.aclose()
+            if incident_store:
+                await incident_store.close()
             logger.info("JSM-HA Notifier shutting down.")
 
     app = FastAPI(
@@ -169,10 +211,10 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         lifespan=lifespan,
     )
 
-    return app, settings, processor
+    return app, settings, processor, incident_store
 
 
-app, _settings, _processor = _build_app()
+app, _settings, _processor, _incident_store = _build_app()
 
 
 # ── Webhook signature verification ───────────────────────────────────────────
@@ -279,6 +321,74 @@ async def invalidate_cache():
     """Force the next on-call check to query JSM instead of using cached data."""
     _processor.jsm_client.invalidate_oncall_cache()
     return {"status": "cache invalidated"}
+
+
+# ── Incident dashboard ────────────────────────────────────────────────────────
+
+@app.get("/incidents", tags=["dashboard"])
+async def list_incidents(
+    status: Optional[str] = Query(
+        default=None, description="Filter by status: open, acknowledged, escalated, closed"
+    ),
+    priority: Optional[str] = Query(
+        default=None, description="Filter by priority: P1, P2, P3, P4, P5"
+    ),
+    limit: int = Query(default=200, ge=1, le=1000, description="Max results"),
+):
+    """
+    Return current incident state.  Requires ``INCIDENT_DASHBOARD_ENABLED=true``.
+
+    Supports optional ``?status=`` and ``?priority=`` filters.
+    Output is Grafana JSON datasource compatible.
+    """
+    if not _incident_store:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
+        )
+    incidents = await _incident_store.get_all(status=status, priority=priority, limit=limit)
+    return JSONResponse(content={"incidents": incidents, "count": len(incidents)})
+
+
+@app.get("/incidents/summary", tags=["dashboard"])
+async def incident_summary():
+    """Return aggregate incident counts by status and priority."""
+    if not _incident_store:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
+        )
+    summary = await _incident_store.get_summary()
+    return JSONResponse(content=summary)
+
+
+@app.get("/incidents/{alert_id}", tags=["dashboard"])
+async def get_incident(
+    alert_id: str = Path(..., description="Alert ID to look up"),
+):
+    """Return a single incident by alert ID."""
+    if not _incident_store:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
+        )
+    incident = await _incident_store.get_one(alert_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return JSONResponse(content=incident)
+
+
+@app.post("/incidents/sync", tags=["dashboard"])
+async def force_incident_sync():
+    """Force an immediate sync of open alerts from JSM."""
+    if not _incident_store:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
+        )
+    alerts = await _processor.jsm_client.list_open_alerts()
+    count = await _incident_store.bulk_upsert(alerts)
+    return {"status": "synced", "alerts_upserted": count}
 
 
 # Allowed characters in JSM alert IDs (UUIDs, alphanumeric, hyphens, underscores).

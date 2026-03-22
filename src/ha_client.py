@@ -493,6 +493,38 @@ class HAClient:
         except Exception as exc:
             return False, str(exc)
 
+    async def fire_webhook(self, webhook_id: str, data: Dict[str, Any]) -> bool:
+        """
+        POST to HA's webhook trigger endpoint.
+
+        HA webhook triggers don't require authentication — they are fired
+        via ``/api/webhook/{webhook_id}`` and pass the JSON body as trigger
+        variables to any automation with a matching ``webhook`` trigger.
+        """
+        url = f"{self.ha_url}/api/webhook/{webhook_id}"
+        try:
+            resp = await self._http.post(
+                url, json=data, timeout=_REQUEST_TIMEOUT,
+            )
+            # HA returns 200 even if no automation matches — that's fine.
+            resp.raise_for_status()
+            logger.info("Fired HA webhook %s", webhook_id)
+            return True
+        except Exception as exc:
+            logger.error("Failed to fire HA webhook %s: %s", webhook_id, exc)
+            return False
+
+    async def fire_webhooks(
+        self, webhook_ids: str, data: Dict[str, Any],
+    ) -> None:
+        """Fire one or more comma-separated HA webhook IDs."""
+        if not webhook_ids.strip():
+            return
+        for wid in webhook_ids.split(","):
+            wid = wid.strip()
+            if wid:
+                await self.fire_webhook(wid, data)
+
     async def dismiss_credential_alert(self) -> None:
         """
         Silently dismiss the 'invalid token' persistent notification from HA.

@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+#### HA Automation Webhooks
+- **HA automation webhooks** — fire HA webhook triggers on all alert lifecycle events: Create, Escalate, Acknowledge, Close, Update (AddNote/AssignOwnership/UnAcknowledge/Seen), and SLA Breach. Configure per-event webhook IDs via `HA_WEBHOOK_ON_CREATE`, `HA_WEBHOOK_ON_ESCALATE`, `HA_WEBHOOK_ON_ACKNOWLEDGE`, `HA_WEBHOOK_ON_CLOSE`, `HA_WEBHOOK_ON_UPDATE`, `HA_WEBHOOK_ON_SLA_BREACH`. Passes alert data (event, alert_id, message, priority, entity, description, source, tags) as trigger variables.
+- **Multiple webhooks per event** — comma-separated webhook IDs fire multiple automations for a single event.
+
+#### Incident State Dashboard
+- **Incident dashboard** (`INCIDENT_DASHBOARD_ENABLED`) — SQLite-backed incident tracker exposing `GET /incidents`, `GET /incidents/summary`, `GET /incidents/{id}`, and `POST /incidents/sync` endpoints. Tracks all alert lifecycle events automatically from webhooks. Filterable by status and priority.
+- **JSM background sync** (`INCIDENT_SYNC_INTERVAL_MINUTES`) — optional periodic sync of open alerts from JSM Ops API to keep the dashboard current even for alerts not delivered via webhook.
+- **Grafana compatibility** — JSON output from `/incidents` is compatible with Grafana's Infinity datasource plugin for building incident dashboards.
+
 #### Emoji Control & Generic Webhook Support
 - **Emoji toggle** (`ENABLE_EMOJIS`) — when `false`, all emojis are stripped from notification titles, media metadata, and incoming alert text. Default is `true`. Useful for HA setups that don't render emojis well.
 - **Generic webhook support** — documented payload format and examples for Uptime Kuma, Grafana, Prometheus Alertmanager, Home Assistant automations, and shell scripts. Any system that can send HTTP POST can trigger HA alerts.
