@@ -76,6 +76,34 @@ def _sanitize(text: str) -> str:
     return _SHELL_META_RE.sub("", text)
 
 
+# Broad regex covering the main Unicode emoji ranges.  Used when emojis are
+# disabled to strip both internal priority emojis and any emojis arriving in
+# incoming alert text from JSM or other sources.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # Emoticons
+    "\U0001F300-\U0001F5FF"  # Misc Symbols and Pictographs
+    "\U0001F680-\U0001F6FF"  # Transport and Map
+    "\U0001F1E0-\U0001F1FF"  # Flags
+    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+    "\U0001FA00-\U0001FA6F"  # Chess Symbols
+    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+    "\U00002702-\U000027B0"  # Dingbats
+    "\U000024C2-\U0001F251"  # Enclosed characters
+    "\U0000FE0F"             # Variation Selector-16
+    "\U0000200D"             # Zero Width Joiner
+    "\U00002600-\U000026FF"  # Misc symbols (⚠, ⬆, ☀, etc.)
+    "\U00002B05-\U00002B55"  # Arrows and geometric shapes
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emojis(text: str) -> str:
+    """Remove all emoji characters and clean up leftover whitespace."""
+    return _EMOJI_RE.sub("", text).strip()
+
+
 class HAClient:
     def __init__(
         self,
@@ -93,6 +121,7 @@ class HAClient:
         terse_announcement_format: str = "{action_prefix} {priority} alert. {message}.",
         volume_default: Optional[float] = None,
         volume_terse: Optional[float] = None,
+        enable_emojis: bool = True,
     ) -> None:
         self.ha_url = ha_url.rstrip("/")
         self.media_player = media_player
@@ -104,6 +133,7 @@ class HAClient:
         self.terse_announcement_format = terse_announcement_format
         self.volume_default = volume_default
         self.volume_terse = volume_terse
+        self.enable_emojis = enable_emojis
         self._headers = {
             "Authorization": f"Bearer {ha_token}",
             "Content-Type": "application/json",
@@ -117,20 +147,32 @@ class HAClient:
 
     # ── Message building ──────────────────────────────────────────────────
 
+    def _clean(self, text: str) -> str:
+        """Sanitize text and optionally strip emojis."""
+        text = _sanitize(text)
+        if not self.enable_emojis:
+            text = _strip_emojis(text)
+        return text
+
+    def _emoji(self, emoji: str) -> str:
+        """Return *emoji* when emojis are enabled, otherwise empty string."""
+        return emoji if self.enable_emojis else ""
+
     def _format_vars(self, alert: Any, action: str) -> Dict[str, str]:
         """Return the common template variables for announcement formats.
 
         All alert-sourced fields are sanitized to strip shell metacharacters
         and control characters before they reach TTS or notification output.
+        When emojis are disabled, emoji characters in alert text are also stripped.
         """
         spoken_priority, _ = _PRIORITY_META.get(
             alert.priority, ("Unknown priority", "⚠️")
         )
         action_prefix = "Escalated alert!" if action == "EscalateNext" else "Attention!"
 
-        message = _sanitize(alert.message)
-        entity = _sanitize(alert.entity) if alert.entity else ""
-        description = _sanitize(alert.description)[:_DESC_MAX_CHARS] if alert.description else ""
+        message = self._clean(alert.message)
+        entity = self._clean(alert.entity) if alert.entity else ""
+        description = self._clean(alert.description)[:_DESC_MAX_CHARS] if alert.description else ""
 
         entity_part = f" System: {entity}." if entity else ""
         description_part = ""
@@ -164,15 +206,17 @@ class HAClient:
         """Build the rich metadata block shown in the HA media player UI."""
         _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
 
-        message = _sanitize(alert.message)
-        title = f"{emoji} {alert.priority}: {message}"
+        message = self._clean(alert.message)
+        prefix = f"{self._emoji(emoji)} " if emoji else ""
+        title = f"{prefix}{alert.priority}: {message}".strip()
         if action == "EscalateNext":
-            title = f"⬆️ ESCALATED — {title}"
+            esc_prefix = f"{self._emoji('⬆️')} ESCALATED — " if self.enable_emojis else "ESCALATED — "
+            title = f"{esc_prefix}{title}"
         if len(title) > 80:
             title = title[:77] + "…"
 
         artist = self.notifier_label
-        album = _sanitize(alert.entity) if alert.entity else "JSM Alert"
+        album = self._clean(alert.entity) if alert.entity else "JSM Alert"
 
         return {
             "title": title,
@@ -334,14 +378,16 @@ class HAClient:
         """
         _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
 
-        title = f"{emoji} JSM {alert.priority} Alert"
+        prefix = f"{self._emoji(emoji)} " if emoji else ""
+        title = f"{prefix}JSM {alert.priority} Alert".strip()
         if action == "EscalateNext":
-            title = f"⬆️ ESCALATED — {title}"
+            esc_prefix = f"{self._emoji('⬆️')} ESCALATED — " if self.enable_emojis else "ESCALATED — "
+            title = f"{esc_prefix}{title}"
 
-        message = _sanitize(alert.message)
-        entity = _sanitize(alert.entity) if alert.entity else ""
-        source = _sanitize(alert.source) if alert.source else ""
-        description = _sanitize(alert.description) if alert.description else ""
+        message = self._clean(alert.message)
+        entity = self._clean(alert.entity) if alert.entity else ""
+        source = self._clean(alert.source) if alert.source else ""
+        description = self._clean(alert.description) if alert.description else ""
 
         lines = [f"**{message}**", ""]
         if entity:
@@ -380,7 +426,7 @@ class HAClient:
             "media_content_type": "provider",
             "extra": {
                 "metadata": {
-                    "title": "⚠️ JSM Notifier System Alert",
+                    "title": f"{self._emoji('⚠️')} JSM Notifier System Alert".strip(),
                     "artist": self.notifier_label,
                     "media_class": "app",
                     "children_media_class": None,
@@ -420,7 +466,7 @@ class HAClient:
             "create",
             {
                 "notification_id": "jsm_notifier_credential_alert",
-                "title": "⚠️ JSM Notifier: Invalid API Token",
+                "title": f"{self._emoji('⚠️')} JSM Notifier: Invalid API Token".strip(),
                 "message": notif_message,
             },
         )

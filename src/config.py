@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     # must include ?key=<this value> or receive a 401.
     webhook_api_key: str = ""
 
+    # ── Emoji control ─────────────────────────────────────────────────────────
+    # When true (default), priority emojis (🔴, 🟠, …) appear in notification
+    # titles and media metadata.  When false, all emojis — both internal ones
+    # and any arriving in alert text — are stripped from output.
+    enable_emojis: bool = True
+
     # ── Announcement format ─────────────────────────────────────────────────
     # Template for the full (detailed) TTS announcement.  Available placeholders:
     #   {action_prefix}  – "Escalated alert!" or "Attention!"

@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+#### Emoji Control & Generic Webhook Support
+- **Emoji toggle** (`ENABLE_EMOJIS`) — when `false`, all emojis are stripped from notification titles, media metadata, and incoming alert text. Default is `true`. Useful for HA setups that don't render emojis well.
+- **Generic webhook support** — documented payload format and examples for Uptime Kuma, Grafana, Prometheus Alertmanager, Home Assistant automations, and shell scripts. Any system that can send HTTP POST can trigger HA alerts.
+
 #### Configurable Announcements
 - **Configurable TTS format templates** (`ANNOUNCEMENT_FORMAT`, `TERSE_ANNOUNCEMENT_FORMAT`) — customise spoken announcements using `{action_prefix}`, `{priority}`, `{message}`, `{entity}`, `{description}`, `{entity_part}`, `{description_part}` placeholders.
 - **Silent time windows** (`SILENT_WINDOW`) — suppress TTS during configurable hours (persistent notifications still created). Cross-midnight windows supported (e.g. `22:30-07:00`). Multiple comma-separated windows allowed.

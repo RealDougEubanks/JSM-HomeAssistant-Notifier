@@ -231,3 +231,67 @@ def test_safe_formatter_blocks_index_access():
     from src.ha_client import _safe_fmt
     with pytest.raises(ValueError, match="Unsafe format field"):
         _safe_fmt.format("{obj[0]}", obj=["a", "b"])
+
+
+# ── Emoji toggle ─────────────────────────────────────────────────────────────
+
+def _make_client(enable_emojis: bool = True) -> HAClient:
+    return HAClient(
+        ha_url="https://ha.example.com",
+        ha_token="token",
+        media_player="media_player.test",
+        tts_service="tts.test",
+        tts_language="en-US",
+        tts_voice="TestVoice",
+        enable_emojis=enable_emojis,
+    )
+
+
+def test_emoji_enabled_includes_emojis_in_metadata():
+    client = _make_client(enable_emojis=True)
+    alert = make_alert(priority="P1", message="Server down").alert
+    meta = client._build_media_metadata(alert, "Create")
+    assert "🔴" in meta["title"]
+
+
+def test_emoji_disabled_strips_internal_emojis():
+    client = _make_client(enable_emojis=False)
+    alert = make_alert(priority="P1", message="Server down").alert
+    meta = client._build_media_metadata(alert, "Create")
+    assert "🔴" not in meta["title"]
+    assert "P1:" in meta["title"]
+    assert "Server down" in meta["title"]
+
+
+def test_emoji_disabled_strips_escalation_emoji():
+    client = _make_client(enable_emojis=False)
+    alert = make_alert(priority="P1", message="Server down").alert
+    meta = client._build_media_metadata(alert, "EscalateNext")
+    assert "⬆️" not in meta["title"]
+    assert "ESCALATED" in meta["title"]
+
+
+def test_emoji_disabled_strips_emojis_from_incoming_text():
+    client = _make_client(enable_emojis=False)
+    alert = make_alert(message="🚨 Fire alarm 🔥 triggered").alert
+    variables = client._format_vars(alert, "Create")
+    assert "🚨" not in variables["message"]
+    assert "🔥" not in variables["message"]
+    assert "Fire alarm" in variables["message"]
+    assert "triggered" in variables["message"]
+
+
+def test_emoji_enabled_preserves_emojis_in_incoming_text():
+    client = _make_client(enable_emojis=True)
+    alert = make_alert(message="🚨 Fire alarm 🔥").alert
+    variables = client._format_vars(alert, "Create")
+    assert "🚨" in variables["message"]
+    assert "🔥" in variables["message"]
+
+
+def test_strip_emojis_function():
+    from src.ha_client import _strip_emojis
+    assert _strip_emojis("Hello 🌍 World") == "Hello  World"
+    assert _strip_emojis("🔴 P1 Alert") == "P1 Alert"
+    assert _strip_emojis("No emojis here") == "No emojis here"
+    assert _strip_emojis("⬆️ ESCALATED") == "ESCALATED"

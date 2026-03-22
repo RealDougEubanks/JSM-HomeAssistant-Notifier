@@ -88,6 +88,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor]:
         terse_announcement_format=settings.terse_announcement_format,
         volume_default=float(settings.ha_volume_default) if settings.ha_volume_default else None,
         volume_terse=float(settings.ha_volume_terse) if settings.ha_volume_terse else None,
+        enable_emojis=settings.enable_emojis,
     )
 
     processor = AlertProcessor(settings, jsm_client, ha_client)

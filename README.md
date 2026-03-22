@@ -56,6 +56,8 @@ JSM alert created / escalated
 - **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
 - **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
 - **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
+- **Emoji toggle** — `ENABLE_EMOJIS=false` strips all emojis from notifications, metadata, and incoming alert text
+- **Generic webhook support** — any system that sends HTTP POST (Grafana, Uptime Kuma, shell scripts, HA automations) can trigger HA alerts
 - **API key authentication** — optional `?key=` query parameter for webhook URL authorization
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
 - **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
@@ -332,6 +334,161 @@ curl -X POST http://localhost:8080/alert \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: $SIG" \
   -d "$BODY"
+```
+
+---
+
+## Using With Other Webhook Sources
+
+The `/alert` endpoint accepts any JSON payload matching the OpsGenie webhook format.  You don't need JSM — any monitoring system, script, or automation that can send HTTP POST requests can trigger HA alerts.
+
+### Required Payload Format
+
+```json
+{
+  "action": "Create",
+  "alert": {
+    "alertId": "unique-id-123",
+    "message": "Your alert title here",
+    "priority": "P1",
+    "entity": "optional-system-name",
+    "description": "Optional longer description text"
+  }
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `action` | Yes | `Create`, `EscalateNext`, `Acknowledge`, or `Close` |
+| `alert.alertId` | Yes | Unique identifier (used for dedup and notification tracking) |
+| `alert.message` | Yes | Alert title / summary (spoken by TTS) |
+| `alert.priority` | No | `P1`–`P5` (default: `P3`) |
+| `alert.entity` | No | System / host name |
+| `alert.description` | No | Longer details (first 200 chars used in TTS) |
+
+### Example: Uptime Kuma
+
+Configure a webhook notification in Uptime Kuma with the Notification Type set to "Webhook" / custom JSON:
+
+```bash
+# Uptime Kuma → Settings → Notifications → Add → Webhook
+# URL: http://your-notifier:8080/alert?mode=always&key=YOUR_KEY
+# Method: POST
+# Body:
+{
+  "action": "Create",
+  "alert": {
+    "alertId": "uptime-kuma-{{ monitorJSON.id }}",
+    "message": "{{ monitorJSON.name }} is {{ heartbeatJSON.status == 1 ? 'UP' : 'DOWN' }}",
+    "priority": "P2",
+    "entity": "{{ monitorJSON.hostname }}"
+  }
+}
+```
+
+### Example: Grafana Alerting
+
+Use a Grafana "webhook" contact point with the OpsGenie payload format:
+
+```bash
+# Grafana → Alerting → Contact Points → New → Webhook
+# URL: http://your-notifier:8080/alert?mode=always&key=YOUR_KEY
+# Method: POST
+#
+# Or use curl to forward Grafana alerts via a script:
+curl -X POST "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "Create",
+    "alert": {
+      "alertId": "grafana-cpu-alert-prod01",
+      "message": "CPU usage above 95% on prod-01",
+      "priority": "P1",
+      "entity": "prod-01",
+      "description": "CPU has been above 95% for the last 5 minutes. Current: 98.2%."
+    }
+  }'
+```
+
+### Example: Prometheus Alertmanager
+
+Use Alertmanager's webhook receiver to POST to the notifier:
+
+```yaml
+# alertmanager.yml
+receivers:
+  - name: ha-notifier
+    webhook_configs:
+      - url: "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+        send_resolved: true
+```
+
+Then use a small relay script or Alertmanager template to transform alerts into the expected format.
+
+### Example: Home Assistant Automation
+
+Trigger an alert from HA itself (e.g. a sensor threshold):
+
+```yaml
+# HA automation action
+service: rest_command.trigger_notifier_alert
+data:
+  alert_id: "ha-temp-alert-{{ now().isoformat() }}"
+  message: "Temperature sensor above threshold"
+  priority: "P2"
+  entity: "sensor.living_room_temperature"
+  description: "Current temperature: {{ states('sensor.living_room_temperature') }}°C"
+```
+
+```yaml
+# configuration.yaml
+rest_command:
+  trigger_notifier_alert:
+    url: "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"action":"Create","alert":{"alertId":"{{ alert_id }}","message":"{{ message }}","priority":"{{ priority }}","entity":"{{ entity }}","description":"{{ description }}"}}
+```
+
+### Example: Simple Shell Script
+
+Trigger an alert from any script or cron job:
+
+```bash
+#!/bin/bash
+# notify-ha.sh — send an alert to the JSM-HA Notifier
+NOTIFIER_URL="http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+
+curl -s -X POST "$NOTIFIER_URL" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"action\": \"Create\",
+    \"alert\": {
+      \"alertId\": \"script-$(date +%s)\",
+      \"message\": \"$1\",
+      \"priority\": \"${2:-P3}\",
+      \"entity\": \"$(hostname)\"
+    }
+  }"
+```
+
+Usage: `./notify-ha.sh "Backup failed on NAS" P2`
+
+### Closing / Acknowledging Alerts
+
+To dismiss the persistent HA notification and stop TTS repeats, send a `Close` or `Acknowledge` action with the same `alertId`:
+
+```bash
+curl -X POST "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "Close", "alert": {"alertId": "the-original-alert-id", "message": "resolved"}}'
+```
+
+Or use the dedicated acknowledge endpoint:
+
+```bash
+curl -X POST "http://your-notifier:8080/alert/the-original-alert-id/acknowledge?key=YOUR_KEY"
 ```
 
 ---
