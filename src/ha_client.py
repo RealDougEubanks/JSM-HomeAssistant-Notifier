@@ -493,6 +493,9 @@ class HAClient:
         except Exception as exc:
             return False, str(exc)
 
+    # Allowed characters in HA webhook IDs.
+    _WEBHOOK_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,200}$")
+
     async def fire_webhook(self, webhook_id: str, data: Dict[str, Any]) -> bool:
         """
         POST to HA's webhook trigger endpoint.
@@ -501,6 +504,9 @@ class HAClient:
         via ``/api/webhook/{webhook_id}`` and pass the JSON body as trigger
         variables to any automation with a matching ``webhook`` trigger.
         """
+        if not self._WEBHOOK_ID_RE.match(webhook_id):
+            logger.warning("Rejecting invalid HA webhook ID: %r", webhook_id)
+            return False
         url = f"{self.ha_url}/api/webhook/{webhook_id}"
         try:
             resp = await self._http.post(

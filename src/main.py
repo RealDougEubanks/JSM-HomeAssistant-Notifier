@@ -334,6 +334,7 @@ async def list_incidents(
         default=None, description="Filter by priority: P1, P2, P3, P4, P5"
     ),
     limit: int = Query(default=200, ge=1, le=1000, description="Max results"),
+    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """
     Return current incident state.  Requires ``INCIDENT_DASHBOARD_ENABLED=true``.
@@ -341,6 +342,8 @@ async def list_incidents(
     Supports optional ``?status=`` and ``?priority=`` filters.
     Output is Grafana JSON datasource compatible.
     """
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -351,8 +354,12 @@ async def list_incidents(
 
 
 @app.get("/incidents/summary", tags=["dashboard"])
-async def incident_summary():
+async def incident_summary(
+    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+):
     """Return aggregate incident counts by status and priority."""
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -365,8 +372,11 @@ async def incident_summary():
 @app.get("/incidents/{alert_id}", tags=["dashboard"])
 async def get_incident(
     alert_id: str = Path(..., description="Alert ID to look up"),
+    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """Return a single incident by alert ID."""
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -379,8 +389,12 @@ async def get_incident(
 
 
 @app.post("/incidents/sync", tags=["dashboard"])
-async def force_incident_sync():
+async def force_incident_sync(
+    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+):
     """Force an immediate sync of open alerts from JSM."""
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
