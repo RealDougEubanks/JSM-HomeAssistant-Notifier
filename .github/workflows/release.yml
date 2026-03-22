@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write   # For uploading Trivy SARIF results
 
     steps:
       - name: Checkout repository
@@ -54,6 +55,10 @@ jobs:
             type=sha,prefix=
             # latest only on default branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=JSM Home Assistant Notifier
+            org.opencontainers.image.description=Bridges JSM/OpsGenie alerts to Home Assistant TTS and notifications
+            org.opencontainers.image.vendor=RealDougEubanks
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -66,6 +71,22 @@ jobs:
           # Layer caching via GitHub Actions cache
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+        continue-on-error: true  # Don't block release, but do report
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+        continue-on-error: true
 
       - name: Image digest
         run: echo "Pushed ${{ steps.meta.outputs.tags }}"

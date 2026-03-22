@@ -11,9 +11,22 @@ All notable changes to this project will be documented in this file.
 - **Multiple webhooks per event** — comma-separated webhook IDs fire multiple automations for a single event.
 
 #### Incident State Dashboard
-- **Incident dashboard** (`INCIDENT_DASHBOARD_ENABLED`) — SQLite-backed incident tracker exposing `GET /incidents`, `GET /incidents/summary`, `GET /incidents/{id}`, and `POST /incidents/sync` endpoints. Tracks all alert lifecycle events automatically from webhooks. Filterable by status and priority.
+- **Incident dashboard** (`INCIDENT_DASHBOARD_ENABLED`) — SQLite-backed incident tracker exposing `GET /incidents`, `GET /incidents/summary`, `GET /incidents/{id}`, `POST /incidents/{id}/close`, and `POST /incidents/sync` endpoints. Tracks all alert lifecycle events automatically from webhooks. Filterable by status and priority.
+- **Force-close endpoint** (`POST /incidents/{id}/close`) — close stale incidents directly from the dashboard without waiting for JSM. Dismisses HA notification and cancels TTS repeats.
+- **Retention policy** (`INCIDENT_RETENTION_OPEN_DAYS`, `INCIDENT_RETENTION_CLOSED_DAYS`) — automatically delete stale open and resolved incidents after configurable number of days. Runs during each sync cycle.
+- **Alert enrichment** — on `Create` events, fetches full alert details from JSM API (tags, teams, responders, custom details) and stores them in the incident database.
+- **Pre-built Grafana dashboard** — `grafana/incident-dashboard.json` ready to import, with stat panels, incident table, and pie charts.
 - **JSM background sync** (`INCIDENT_SYNC_INTERVAL_MINUTES`) — optional periodic sync of open alerts from JSM Ops API to keep the dashboard current even for alerts not delivered via webhook.
 - **Grafana compatibility** — JSON output from `/incidents` is compatible with Grafana's Infinity datasource plugin for building incident dashboards.
+
+#### CI/CD Improvements
+- **Python matrix testing** — CI now tests against Python 3.11, 3.12, and 3.13.
+- **pip-audit** — scans Python dependencies for known CVEs on every CI run.
+- **bandit** — runs Python code security analysis (advisory, non-blocking).
+- **Trivy container scanning** — scans Docker images for vulnerabilities before push, uploads SARIF results to GitHub Security.
+- **Coverage threshold** — CI fails if test coverage drops below 70%.
+- **Explicit permissions** — both workflows now use minimal `permissions:` blocks.
+- **OCI labels** — Docker images include `org.opencontainers.image.*` metadata labels.
 
 #### Emoji Control & Generic Webhook Support
 - **Emoji toggle** (`ENABLE_EMOJIS`) — when `false`, all emojis are stripped from notification titles, media metadata, and incoming alert text. Default is `true`. Useful for HA setups that don't render emojis well.

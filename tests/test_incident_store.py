@@ -225,6 +225,7 @@ async def test_process_updates_incident_store():
     ha.dismiss_notification = AsyncMock(return_value=True)
 
     jsm = MagicMock(spec=JSMClient)
+    jsm.get_alert_details = AsyncMock(return_value=None)
     store = MagicMock(spec=IncidentStore)
     store.upsert = AsyncMock()
 
@@ -245,3 +246,74 @@ async def test_process_updates_incident_store():
     await proc.process(ack_payload)
     store.upsert.assert_called_once()
     assert store.upsert.call_args[0][1] == "Acknowledge"
+
+
+# ── Force-close ───────────────────────────────────────────────────────────────
+
+
+async def test_force_close(store: IncidentStore):
+    await store.upsert({"alertId": "fc-001", "message": "Test", "priority": "P1"}, "Create")
+    closed = await store.force_close("fc-001")
+    assert closed is True
+
+    result = await store.get_one("fc-001")
+    assert result["status"] == "closed"
+    assert result["action"] == "ForceClose"
+    assert result["closed_at"] is not None
+
+
+async def test_force_close_already_closed(store: IncidentStore):
+    await store.upsert({"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Create")
+    await store.upsert({"alertId": "fc-002", "message": "Test", "priority": "P1"}, "Close")
+    closed = await store.force_close("fc-002")
+    assert closed is False
+
+
+async def test_force_close_not_found(store: IncidentStore):
+    closed = await store.force_close("nonexistent")
+    assert closed is False
+
+
+# ── Retention cleanup ─────────────────────────────────────────────────────────
+
+
+async def test_retention_cleanup(store: IncidentStore):
+    # Insert incidents.
+    await store.upsert({"alertId": "ret-1", "message": "Old open", "priority": "P1"}, "Create")
+    await store.upsert({"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Create")
+    await store.upsert({"alertId": "ret-2", "message": "Old closed", "priority": "P2"}, "Close")
+
+    # With 0 days retention, nothing should be deleted.
+    deleted = await store.cleanup(open_days=0, closed_days=0)
+    assert deleted == 0
+
+    # With very large retention, nothing should be deleted.
+    deleted = await store.cleanup(open_days=9999, closed_days=9999)
+    assert deleted == 0
+
+    # All incidents are brand new, so even 1-day retention won't delete them.
+    deleted = await store.cleanup(open_days=1, closed_days=1)
+    assert deleted == 0
+
+
+# ── Enrichment fields ────────────────────────────────────────────────────────
+
+
+async def test_enrichment_fields_stored(store: IncidentStore):
+    alert = {
+        "alertId": "enrich-001",
+        "message": "Test",
+        "priority": "P1",
+        "tags": ["infra", "critical"],
+        "teams": [{"name": "SRE"}, {"name": "Platform"}],
+        "responders": [{"name": "Alice"}, {"id": "user-123"}],
+        "details": {"runbook": "https://wiki/runbook-123"},
+    }
+    await store.upsert(alert, "Create")
+
+    result = await store.get_one("enrich-001")
+    assert result is not None
+    assert "infra" in result["tags"]
+    assert "SRE" in result["teams"]
+    assert "Alice" in result["responders"]
+    assert "runbook" in result["details_json"]

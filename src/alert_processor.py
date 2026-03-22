@@ -376,14 +376,31 @@ class AlertProcessor:
         # ── Update incident store (for ALL actions) ───────────────────────
         if self.incident_store:
             try:
-                alert_dict = {
+                alert_dict: Dict[str, Any] = {
                     "alertId": payload.alert.alertId,
                     "message": payload.alert.message,
                     "priority": payload.alert.priority,
                     "entity": payload.alert.entity or "",
                     "description": payload.alert.description or "",
                     "source": payload.alert.source or "",
+                    "tags": payload.alert.tags,
+                    "teams": payload.alert.teams,
+                    "responders": payload.alert.responders,
+                    "details": payload.alert.details,
                 }
+                # Enrich on Create: fetch full alert details from JSM for
+                # extra context (runbooks, custom fields, team assignments).
+                if payload.action == "Create":
+                    enriched = await self.jsm_client.get_alert_details(
+                        payload.alert.alertId
+                    )
+                    if enriched:
+                        for key in ("tags", "teams", "responders", "details"):
+                            if enriched.get(key):
+                                alert_dict[key] = enriched[key]
+                        logger.info(
+                            "Enriched alert %s from JSM API", payload.alert.alertId
+                        )
                 await self.incident_store.upsert(alert_dict, payload.action)
             except Exception as exc:
                 logger.error("Failed to update incident store: %s", exc)

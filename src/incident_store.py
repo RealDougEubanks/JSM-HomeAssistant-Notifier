@@ -19,9 +19,10 @@ Design decisions
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,10 @@ CREATE TABLE IF NOT EXISTS incidents (
     source         TEXT DEFAULT '',
     status         TEXT NOT NULL DEFAULT 'open',
     action         TEXT NOT NULL DEFAULT 'Create',
+    tags           TEXT DEFAULT '',
+    teams          TEXT DEFAULT '',
+    responders     TEXT DEFAULT '',
+    details_json   TEXT DEFAULT '',
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     acknowledged_at TEXT,
@@ -79,6 +84,18 @@ class IncidentStore:
         description = alert.get("description", "") or ""
         source = alert.get("source", "") or ""
 
+        # Enrichment fields (may come from JSM API detail calls).
+        tags = ",".join(alert.get("tags", [])) if isinstance(alert.get("tags"), list) else ""
+        teams_raw = alert.get("teams", [])
+        teams = ",".join(
+            t.get("name", t.get("id", "")) for t in teams_raw if isinstance(t, dict)
+        ) if isinstance(teams_raw, list) else ""
+        responders_raw = alert.get("responders", [])
+        responders = ",".join(
+            r.get("name", r.get("id", "")) for r in responders_raw if isinstance(r, dict)
+        ) if isinstance(responders_raw, list) else ""
+        details_json = json.dumps(alert.get("details", {})) if alert.get("details") else ""
+
         # Determine status from action.
         status = "open"
         ack_at = None
@@ -97,8 +114,9 @@ class IncidentStore:
             """
             INSERT INTO incidents
                 (alert_id, message, priority, entity, description, source,
-                 status, action, created_at, updated_at, acknowledged_at, closed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, action, tags, teams, responders, details_json,
+                 created_at, updated_at, acknowledged_at, closed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(alert_id) DO UPDATE SET
                 message = COALESCE(excluded.message, incidents.message),
                 priority = COALESCE(excluded.priority, incidents.priority),
@@ -107,12 +125,17 @@ class IncidentStore:
                 source = CASE WHEN excluded.source != '' THEN excluded.source ELSE incidents.source END,
                 status = excluded.status,
                 action = excluded.action,
+                tags = CASE WHEN excluded.tags != '' THEN excluded.tags ELSE incidents.tags END,
+                teams = CASE WHEN excluded.teams != '' THEN excluded.teams ELSE incidents.teams END,
+                responders = CASE WHEN excluded.responders != '' THEN excluded.responders ELSE incidents.responders END,
+                details_json = CASE WHEN excluded.details_json != '' THEN excluded.details_json ELSE incidents.details_json END,
                 updated_at = excluded.updated_at,
                 acknowledged_at = COALESCE(excluded.acknowledged_at, incidents.acknowledged_at),
                 closed_at = COALESCE(excluded.closed_at, incidents.closed_at)
             """,
             (alert_id, message, priority, entity, description, source,
-             status, action, now, now, ack_at, closed_at),
+             status, action, tags, teams, responders, details_json,
+             now, now, ack_at, closed_at),
         )
         conn.commit()
 
@@ -237,6 +260,63 @@ class IncidentStore:
     async def get_summary(self) -> Dict[str, Any]:
         """Return aggregate counts for the dashboard."""
         return await self._run(self._get_summary_sync)
+
+    # ── Force-close ────────────────────────────────────────────────────────
+
+    def _force_close_sync(self, alert_id: str) -> bool:
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            """
+            UPDATE incidents
+            SET status = 'closed', action = 'ForceClose', closed_at = ?, updated_at = ?
+            WHERE alert_id = ? AND status != 'closed'
+            """,
+            (now, now, alert_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    async def force_close(self, alert_id: str) -> bool:
+        """Force-close an incident from the dashboard.  Returns True if found and closed."""
+        return await self._run(self._force_close_sync, alert_id)
+
+    # ── Retention cleanup ─────────────────────────────────────────────────
+
+    def _cleanup_sync(self, open_days: int, closed_days: int) -> int:
+        """Delete incidents older than the configured retention periods."""
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc)
+        deleted = 0
+
+        if closed_days > 0:
+            cutoff = (now - timedelta(days=closed_days)).isoformat()
+            cur = conn.execute(
+                "DELETE FROM incidents WHERE status IN ('closed') AND updated_at < ?",
+                (cutoff,),
+            )
+            deleted += cur.rowcount
+
+        if open_days > 0:
+            cutoff = (now - timedelta(days=open_days)).isoformat()
+            cur = conn.execute(
+                "DELETE FROM incidents WHERE status NOT IN ('closed') AND updated_at < ?",
+                (cutoff,),
+            )
+            deleted += cur.rowcount
+
+        if deleted:
+            conn.commit()
+            logger.info(
+                "Retention cleanup: deleted %d stale incident(s) "
+                "(open_days=%d, closed_days=%d)",
+                deleted, open_days, closed_days,
+            )
+        return deleted
+
+    async def cleanup(self, open_days: int, closed_days: int) -> int:
+        """Run retention cleanup.  Returns count of deleted rows."""
+        return await self._run(self._cleanup_sync, open_days, closed_days)
 
     async def close(self) -> None:
         """Close the database connection."""

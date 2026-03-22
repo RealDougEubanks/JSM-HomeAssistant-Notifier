@@ -249,6 +249,29 @@ class JSMClient:
             logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
             return False, msg
 
+    async def get_alert_details(self, alert_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch full alert details from JSM, including extra context like
+        responders, teams, tags, and custom details.
+
+        Returns the alert dict on success, None on failure.
+        """
+        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}"
+        try:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            # JSM wraps the alert in a "data" key.
+            return data.get("data", data)  # type: ignore[return-value]
+        except Exception as exc:
+            logger.warning("Failed to fetch alert details for %s: %s", alert_id, exc)
+            return None
+
     async def list_open_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Fetch open alerts from the JSM Ops API.

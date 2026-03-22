@@ -868,6 +868,58 @@ The `/incidents` endpoint is compatible with Grafana's **JSON** or **Infinity** 
 
 For the summary endpoint, use `/incidents/summary` to build gauge or stat panels showing open incident counts by priority.
 
+#### Pre-built Dashboard
+
+A ready-to-import Grafana dashboard is included in this repo:
+
+```
+grafana/incident-dashboard.json
+```
+
+To import:
+1. In Grafana, go to **Dashboards** > **Import**
+2. Upload `grafana/incident-dashboard.json`
+3. Select your Infinity datasource
+4. Set the `api_key` variable to your `WEBHOOK_API_KEY` value (under dashboard Settings > Variables)
+
+The dashboard includes:
+- Stat panels: Total Open, Total Closed, Open P1, Open P2, Open P3
+- Full incident table with priority/status color coding and column filters
+- Pie charts: By Status, By Priority (open only)
+- Auto-refresh every 30 seconds
+
+### Force-Close Incidents
+
+Close a stale incident directly from the API (without waiting for JSM):
+
+```bash
+curl -X POST "http://localhost:8080/incidents/the-alert-id/close?key=YOUR_KEY"
+```
+
+This sets the status to `closed`, dismisses the HA persistent notification, and cancels any TTS repeats.
+
+### Retention Policy
+
+Automatically clean up old incidents to prevent unbounded database growth:
+
+```env
+INCIDENT_RETENTION_OPEN_DAYS=30       # Delete stale open incidents after 30 days
+INCIDENT_RETENTION_CLOSED_DAYS=90     # Delete resolved incidents after 90 days
+```
+
+Retention runs during each sync cycle (`INCIDENT_SYNC_INTERVAL_MINUTES`).  Set to `0` to keep everything forever (default).
+
+### Alert Enrichment
+
+When the incident dashboard is enabled, the notifier automatically enriches new alerts by fetching full details from the JSM API on `Create` events.  This adds:
+
+- **Tags** — alert tags from JSM
+- **Teams** — team assignments
+- **Responders** — who the alert was sent to
+- **Custom details** — any key/value pairs from the alert's `details` field
+
+All enrichment data is stored in the SQLite database and returned in the `/incidents` API response.
+
 ---
 
 ## Running on unRAID (or any Docker host)

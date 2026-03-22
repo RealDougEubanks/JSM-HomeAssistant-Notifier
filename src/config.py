@@ -222,6 +222,12 @@ class Settings(BaseSettings):
     # How often (minutes) to sync open incidents from JSM.
     # Set to 0 to disable background sync (only updates from webhooks).
     incident_sync_interval_minutes: int = 0
+    # Retention policy: automatically delete incidents older than N days.
+    # Open incidents older than this are assumed stale and cleaned up.
+    # Set to 0 to keep forever.
+    incident_retention_open_days: int = 0
+    # Closed/acknowledged incidents older than this are cleaned up.
+    incident_retention_closed_days: int = 0
 
     # ── Validators ───────────────────────────────────────────────────────────
     # These run when values arrive via __init__ kwargs (e.g. in tests).

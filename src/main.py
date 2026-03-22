@@ -105,7 +105,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentSt
     processor = AlertProcessor(settings, jsm_client, ha_client, incident_store)
 
     async def _incident_sync_loop() -> None:
-        """Background task: periodically sync open alerts from JSM."""
+        """Background task: periodically sync open alerts from JSM and run retention cleanup."""
         interval = settings.incident_sync_interval_minutes * 60
         if interval <= 0 or not incident_store:
             return
@@ -118,6 +118,11 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentSt
                 if alerts:
                     count = await incident_store.bulk_upsert(alerts)
                     logger.info("Incident sync: upserted %d alert(s)", count)
+                # Run retention cleanup if configured.
+                open_days = settings.incident_retention_open_days
+                closed_days = settings.incident_retention_closed_days
+                if open_days > 0 or closed_days > 0:
+                    await incident_store.cleanup(open_days, closed_days)
             except Exception as exc:
                 logger.error("Incident sync failed: %s", exc)
             await asyncio.sleep(interval)
@@ -279,10 +284,14 @@ async def deep_health_check():
     checks: dict = {}
 
     jsm_ok, jsm_err = await _processor.jsm_client.verify_credentials()
-    checks["jsm_api"] = "ok" if jsm_ok else f"error: {jsm_err[:100]}"
+    checks["jsm_api"] = "ok" if jsm_ok else "error"
+    if not jsm_ok:
+        logger.warning("Deep health check: JSM API failed — %s", jsm_err)
 
     ha_ok, ha_err = await _processor.ha_client.verify_connectivity()
-    checks["ha_api"] = "ok" if ha_ok else f"error: {ha_err[:100]}"
+    checks["ha_api"] = "ok" if ha_ok else "error"
+    if not ha_ok:
+        logger.warning("Deep health check: HA API failed — %s", ha_err)
 
     all_ok = all(v == "ok" for v in checks.values())
     return JSONResponse(
@@ -386,6 +395,33 @@ async def get_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
     return JSONResponse(content=incident)
+
+
+@app.post("/incidents/{alert_id}/close", tags=["dashboard"])
+async def force_close_incident(
+    alert_id: str = Path(..., description="Alert ID to force-close"),
+    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+):
+    """
+    Force-close an incident from the dashboard.
+
+    Sets status to 'closed' and records a ForceClose action.  Also dismisses
+    any corresponding HA persistent notification and cancels TTS repeats.
+    """
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not _incident_store:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
+        )
+    closed = await _incident_store.force_close(alert_id)
+    if not closed:
+        raise HTTPException(status_code=404, detail="Incident not found or already closed")
+    # Also dismiss HA notification and cancel TTS repeat.
+    await _processor.ha_client.dismiss_notification(alert_id)
+    _processor.cancel_tts_repeat(alert_id)
+    return {"alert_id": alert_id, "status": "closed", "action": "ForceClose"}
 
 
 @app.post("/incidents/sync", tags=["dashboard"])

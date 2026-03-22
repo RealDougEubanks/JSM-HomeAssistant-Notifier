@@ -1,0 +1,516 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_INFINITY",
+      "label": "Infinity",
+      "description": "Infinity datasource pointing at http://your-notifier:8080",
+      "type": "datasource",
+      "pluginId": "yesoreyeram-infinity-datasource",
+      "pluginName": "Infinity"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "yesoreyeram-infinity-datasource",
+      "name": "Infinity",
+      "version": "2.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "barchart",
+      "name": "Bar chart",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "JSM Home Assistant Notifier — Incident State Dashboard",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Summary",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "columns": [],
+          "filters": [],
+          "format": 1,
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "$.total_open",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" }
+        }
+      ],
+      "title": "Total Open",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "columns": [],
+          "filters": [],
+          "format": 1,
+          "root_selector": "$.total_closed",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "Total Closed",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-red", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "columns": [],
+          "filters": [],
+          "format": 1,
+          "root_selector": "$.by_priority.P1",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "Open P1 (Critical)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-orange", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "columns": [],
+          "filters": [],
+          "format": 1,
+          "root_selector": "$.by_priority.P2",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "Open P2 (High)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-yellow", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "columns": [],
+          "filters": [],
+          "format": 1,
+          "root_selector": "$.by_priority.P3",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "Open P3 (Medium)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Open Incidents",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "priority" },
+            "properties": [
+              { "id": "custom.width", "value": 60 },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "P1": { "text": "P1", "color": "dark-red" }, "P2": { "text": "P2", "color": "dark-orange" }, "P3": { "text": "P3", "color": "dark-yellow" }, "P4": { "text": "P4", "color": "dark-green" }, "P5": { "text": "P5", "color": "dark-blue" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "custom.width", "value": 100 },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "open": { "text": "Open", "color": "red" }, "acknowledged": { "text": "Acked", "color": "blue" }, "escalated": { "text": "Escalated", "color": "orange" }, "closed": { "text": "Closed", "color": "green" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "alert_id" },
+            "properties": [{ "id": "custom.width", "value": 200 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "created_at" },
+            "properties": [{ "id": "custom.width", "value": 170 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "updated_at" },
+            "properties": [{ "id": "custom.width", "value": 170 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "description" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "acknowledged_at" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "closed_at" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "action" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "source" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 6 },
+      "id": 10,
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "priority", "desc": false }],
+        "cellHeight": "sm",
+        "footer": { "show": true, "countRows": true, "reducer": ["count"] }
+      },
+      "targets": [
+        {
+          "columns": [
+            { "selector": "alert_id", "text": "alert_id", "type": "string" },
+            { "selector": "priority", "text": "priority", "type": "string" },
+            { "selector": "status", "text": "status", "type": "string" },
+            { "selector": "message", "text": "message", "type": "string" },
+            { "selector": "entity", "text": "entity", "type": "string" },
+            { "selector": "created_at", "text": "created_at", "type": "string" },
+            { "selector": "updated_at", "text": "updated_at", "type": "string" },
+            { "selector": "description", "text": "description", "type": "string" }
+          ],
+          "filters": [],
+          "format": 1,
+          "root_selector": "$.incidents",
+          "source": "url",
+          "type": "json",
+          "url": "/incidents?status=${status_filter}&key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "Incident List",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 102,
+      "title": "Breakdown",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "open" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "acknowledged" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "escalated" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "closed" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "id": 20,
+      "options": {
+        "displayLabels": ["name", "value"],
+        "legend": { "displayMode": "list", "placement": "right" },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "columns": [
+            { "selector": "status", "text": "status", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ],
+          "filters": [],
+          "format": 1,
+          "parser": "backend",
+          "root_selector": "",
+          "source": "inline",
+          "type": "json",
+          "data": "",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "By Status",
+      "description": "Distribution of incidents by current status",
+      "type": "piechart"
+    },
+    {
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${DS_INFINITY}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "P1" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P2" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P3" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P4" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P5" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-blue", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "id": 21,
+      "options": {
+        "displayLabels": ["name", "value"],
+        "legend": { "displayMode": "list", "placement": "right" },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "columns": [
+            { "selector": "priority", "text": "priority", "type": "string" },
+            { "selector": "count", "text": "count", "type": "number" }
+          ],
+          "filters": [],
+          "format": 1,
+          "root_selector": "",
+          "source": "inline",
+          "type": "json",
+          "url": "/incidents/summary?key=${api_key}",
+          "url_options": { "method": "GET" },
+          "refId": "A"
+        }
+      ],
+      "title": "By Priority (Open)",
+      "description": "Distribution of open incidents by priority",
+      "type": "piechart"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["jsm", "incidents", "on-call", "home-assistant"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "description": "WEBHOOK_API_KEY from your .env file",
+        "hide": 2,
+        "label": "API Key",
+        "name": "api_key",
+        "options": [],
+        "query": "",
+        "skipUrlSync": true,
+        "type": "textbox"
+      },
+      {
+        "current": { "selected": true, "text": "open", "value": "open" },
+        "description": "Filter incidents by status",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Status",
+        "name": "status_filter",
+        "options": [
+          { "selected": true, "text": "open", "value": "open" },
+          { "selected": false, "text": "acknowledged", "value": "acknowledged" },
+          { "selected": false, "text": "escalated", "value": "escalated" },
+          { "selected": false, "text": "closed", "value": "closed" }
+        ],
+        "query": "open,acknowledged,escalated,closed",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "JSM Incident Dashboard",
+  "uid": "jsm-ha-notifier-incidents",
+  "version": 1
+}
