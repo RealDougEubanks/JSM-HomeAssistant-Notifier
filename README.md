@@ -953,9 +953,9 @@ docker run -d \
 
 ---
 
-## CI/CD — GitHub Actions & GHCR
+## CI/CD — GitHub Actions & Container Registries
 
-The repository includes two workflows.
+The repository includes two workflows.  Images are published to both **GitHub Container Registry (GHCR)** and **Docker Hub**.
 
 ### CI (`.github/workflows/ci.yml`)
 
@@ -963,11 +963,14 @@ Triggers on every push to `main` or `develop` and on pull requests.  Runs:
 - `ruff` (lint)
 - `black` (format check)
 - `mypy` (type check, advisory)
-- `pytest` with coverage
+- `pip-audit` (dependency CVE scan)
+- `bandit` (Python SAST, advisory)
+- `pytest` with coverage (fails below 70%)
+- Tests against Python 3.11, 3.12, 3.13
 
 ### Release (`.github/workflows/release.yml`)
 
-Triggers on push to `main` or any version tag (`v*`).  Builds a multi-arch Docker image (linux/amd64 + linux/arm64) and pushes it to GitHub Container Registry (GHCR).
+Triggers on push to `main` or any version tag (`v*`).  Builds a multi-arch Docker image (linux/amd64 + linux/arm64) and pushes to both **GHCR** and **Docker Hub**.  Also runs **Trivy** container vulnerability scanning and uploads results to GitHub Security.
 
 **No personal access tokens or manual secrets are needed** — the workflow uses the built-in `GITHUB_TOKEN` that GitHub provides automatically to every Actions run, which already has `packages: write` permission as configured in the workflow.
 
@@ -994,7 +997,25 @@ Alternatively, link the package to your repository:
 
 Once public, `docker pull ghcr.io/realdougeubanks/jsm-ha-notifier:latest` works without login from any machine.
 
-#### Updating `docker-compose.yml` to use the GHCR image
+#### Docker Hub setup
+
+The release workflow also pushes to Docker Hub if credentials are configured.  To enable:
+
+1. Create a Docker Hub access token at <https://hub.docker.com/settings/security>
+2. In your GitHub repo, go to **Settings** > **Secrets and variables** > **Actions**
+3. Add these secrets/variables:
+   - **Variable** `DOCKERHUB_USERNAME` = your Docker Hub username (e.g. `realdougeubanks`)
+   - **Secret** `DOCKERHUB_TOKEN` = the access token from step 1
+
+Once configured, every release pushes to both registries:
+```
+docker pull ghcr.io/realdougeubanks/jsm-ha-notifier:latest
+docker pull realdougeubanks/jsm-ha-notifier:latest
+```
+
+If Docker Hub credentials are not set, the workflow gracefully skips the Docker Hub login and only pushes to GHCR.
+
+#### Updating `docker-compose.yml` to use a published image
 
 After the image has been published, edit `docker-compose.yml`:
 
@@ -1217,15 +1238,20 @@ jsm-ha-notifier/
 │   ├── incident_store.py   # SQLite-backed incident state tracker
 │   └── time_windows.py     # Time-window parsing and media player routing
 ├── tests/
-│   ├── conftest.py         # Shared fixtures
+│   ├── conftest.py                  # Shared fixtures
 │   ├── test_models.py
 │   ├── test_config.py
 │   ├── test_ha_client.py
 │   ├── test_alert_processor.py
 │   ├── test_announcement_format.py  # Format, time windows, priority override, repeat
+│   ├── test_robustness.py           # Security: sanitization, safe formatter, emoji toggle
+│   ├── test_incident_store.py       # Incident store, webhooks, force-close, retention
 │   └── test_time_windows.py         # Window parsing, player routing
+├── grafana/
+│   └── incident-dashboard.json      # Pre-built Grafana dashboard (import-ready)
 ├── .env.example            # Template — copy to .env and fill in values
 ├── .gitignore
+├── CHANGELOG.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml          # black, ruff, pytest, mypy config
