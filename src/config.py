@@ -59,9 +59,7 @@ def _parse_csv_or_json(field_name: str, value: Any) -> Any:
 class _CsvAwareEnvSource(EnvSettingsSource):
     """Reads process environment variables; handles CSV list fields."""
 
-    def decode_complex_value(
-        self, field_name: str, field: FieldInfo, value: Any
-    ) -> Any:
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
         result = _parse_csv_or_json(field_name, value)
         # If _parse_csv_or_json returned a list we're done; otherwise delegate.
         if isinstance(result, list) and field_name in _CSV_FIELDS:
@@ -72,9 +70,7 @@ class _CsvAwareEnvSource(EnvSettingsSource):
 class _CsvAwareDotEnvSource(DotEnvSettingsSource):
     """Reads .env file; handles CSV list fields."""
 
-    def decode_complex_value(
-        self, field_name: str, field: FieldInfo, value: Any
-    ) -> Any:
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
         result = _parse_csv_or_json(field_name, value)
         if isinstance(result, list) and field_name in _CSV_FIELDS:
             return result
@@ -91,7 +87,9 @@ class Settings(BaseSettings):
 
     # ── Atlassian / JSM ──────────────────────────────────────────────────────
     jsm_api_url: str = "https://api.atlassian.com"
-    jira_base_url: str = ""  # e.g. https://your-org.atlassian.net (reserved; not currently used)
+    jira_base_url: str = (
+        ""  # e.g. https://your-org.atlassian.net (reserved; not currently used)
+    )
     jsm_cloud_id: str
     jsm_username: str
     jsm_api_token: str
@@ -232,7 +230,9 @@ class Settings(BaseSettings):
     # ── Validators ───────────────────────────────────────────────────────────
     # These run when values arrive via __init__ kwargs (e.g. in tests).
     # The custom sources above handle the same conversion for .env / env vars.
-    @field_validator("always_notify_schedule_names", "check_oncall_schedule_names", mode="before")
+    @field_validator(
+        "always_notify_schedule_names", "check_oncall_schedule_names", mode="before"
+    )
     @classmethod
     def _coerce_csv(cls, v: object) -> list[str]:
         if isinstance(v, str):

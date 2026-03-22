@@ -3,6 +3,7 @@ Tests for AlertProcessor — the core routing / notification decision logic.
 
 All external I/O (JSM API + HA API) is mocked so tests run offline and fast.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -16,6 +17,7 @@ from src.jsm_client import JSMClient
 from tests.conftest import make_alert
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_processor(
     settings: Settings,
@@ -41,6 +43,7 @@ def _make_processor(
 
 # ── always_notify mode ────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_always_notify_creates_notification(settings: Settings):
     proc = _make_processor(settings, is_on_call=False)
@@ -52,6 +55,7 @@ async def test_always_notify_creates_notification(settings: Settings):
 
 
 # ── On-call check ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_on_call_notifies(settings: Settings):
@@ -72,6 +76,7 @@ async def test_not_on_call_no_notification(settings: Settings):
 
 
 # ── Escalation path ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_escalation_to_me_notifies(settings: Settings):
@@ -111,6 +116,7 @@ async def test_escalation_via_responders_list(settings: Settings):
 
 # ── Ignored actions ───────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["Acknowledge", "AddNote", "AssignOwnership", "Seen"])
 async def test_ignored_actions_do_not_notify(action: str, settings: Settings):
@@ -138,6 +144,7 @@ async def test_close_dismisses_notification(settings: Settings):
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_duplicate_alert_suppressed(settings: Settings):
@@ -168,6 +175,7 @@ async def test_same_alert_different_action_not_duplicate(settings: Settings):
 
 
 # ── Schedule not found ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_schedule_not_found_skipped(settings: Settings):

@@ -1,4 +1,5 @@
 """Tests for robustness and security: sanitization, safe formatter, dedup, client lifecycle."""
+
 from __future__ import annotations
 
 import time
@@ -48,6 +49,7 @@ def _processor(settings: Settings, is_on_call: bool = True) -> AlertProcessor:
 
 # ── Dedup cache max size ─────────────────────────────────────────────────────
 
+
 def test_dedup_cache_bounded():
     """Dedup cache must not grow past _MAX_DEDUP_CACHE_SIZE."""
     s = _settings()
@@ -68,6 +70,7 @@ def test_dedup_cache_bounded():
 
 # ── Dismiss result tracking ──────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_dismiss_logs_ha_result():
     """Dismiss action should still mark dismissed=True even if HA call fails."""
@@ -84,9 +87,11 @@ async def test_dismiss_logs_ha_result():
 
 # ── Persistent httpx client ──────────────────────────────────────────────────
 
+
 def test_jsm_client_has_persistent_http():
     """JSMClient should have a persistent httpx.AsyncClient."""
     import httpx
+
     client = JSMClient(
         api_url="https://api.atlassian.com",
         cloud_id="test",
@@ -100,6 +105,7 @@ def test_jsm_client_has_persistent_http():
 def test_ha_client_has_persistent_http():
     """HAClient should have a persistent httpx.AsyncClient."""
     import httpx
+
     client = HAClient(
         ha_url="https://ha.example.com",
         ha_token="token",
@@ -142,12 +148,15 @@ async def test_ha_client_aclose():
 
 # ── TTS repeat race condition fix ────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_start_repeat_cancels_existing():
     """Starting a repeat for the same alert should cancel the old one."""
     import asyncio
 
-    s = _settings(tts_repeat_interval_seconds=60, tts_repeat_max=5, tts_repeat_priorities="P1")
+    s = _settings(
+        tts_repeat_interval_seconds=60, tts_repeat_max=5, tts_repeat_priorities="P1"
+    )
     proc = _processor(s)
 
     alert = make_alert(priority="P1").alert
@@ -170,8 +179,10 @@ async def test_start_repeat_cancels_existing():
 
 # ── Input sanitization ───────────────────────────────────────────────────────
 
+
 def test_sanitizer_strips_shell_metacharacters():
     from src.ha_client import _sanitize
+
     assert _sanitize("hello") == "hello"
     assert _sanitize("$(whoami)") == "whoami"
     assert _sanitize("`rm -rf /`") == "rm -rf /"  # backticks stripped, / kept
@@ -182,12 +193,14 @@ def test_sanitizer_strips_shell_metacharacters():
 
 def test_sanitizer_strips_control_characters():
     from src.ha_client import _sanitize
+
     assert _sanitize("line1\x00line2") == "line1line2"
     assert _sanitize("null\x01byte") == "nullbyte"
 
 
 def test_sanitizer_preserves_normal_text():
     from src.ha_client import _sanitize
+
     text = "Priority 1, Critical alert: CPU usage at 95% on prod-server-01!"
     assert _sanitize(text) == text
 
@@ -215,25 +228,30 @@ def test_format_vars_sanitizes_alert_fields():
 
 # ── Safe formatter ───────────────────────────────────────────────────────────
 
+
 def test_safe_formatter_allows_simple_placeholders():
     from src.ha_client import _safe_fmt
+
     result = _safe_fmt.format("{greeting} {name}!", greeting="Hello", name="World")
     assert result == "Hello World!"
 
 
 def test_safe_formatter_blocks_attribute_access():
     from src.ha_client import _safe_fmt
+
     with pytest.raises(ValueError, match="Unsafe format field"):
         _safe_fmt.format("{obj.__class__}", obj="test")
 
 
 def test_safe_formatter_blocks_index_access():
     from src.ha_client import _safe_fmt
+
     with pytest.raises(ValueError, match="Unsafe format field"):
         _safe_fmt.format("{obj[0]}", obj=["a", "b"])
 
 
 # ── Emoji toggle ─────────────────────────────────────────────────────────────
+
 
 def _make_client(enable_emojis: bool = True) -> HAClient:
     return HAClient(
@@ -291,6 +309,7 @@ def test_emoji_enabled_preserves_emojis_in_incoming_text():
 
 def test_strip_emojis_function():
     from src.ha_client import _strip_emojis
+
     assert _strip_emojis("Hello 🌍 World") == "Hello  World"
     assert _strip_emojis("🔴 P1 Alert") == "P1 Alert"
     assert _strip_emojis("No emojis here") == "No emojis here"

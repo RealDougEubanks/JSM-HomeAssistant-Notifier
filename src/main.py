@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 # ── Application bootstrap ─────────────────────────────────────────────────────
 
+
 def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | None]:
     settings = Settings()  # Reads from .env / env vars
 
@@ -85,8 +86,12 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         notifier_label=settings.ha_notifier_label,
         announcement_format=settings.announcement_format,
         terse_announcement_format=settings.terse_announcement_format,
-        volume_default=float(settings.ha_volume_default) if settings.ha_volume_default else None,
-        volume_terse=float(settings.ha_volume_terse) if settings.ha_volume_terse else None,
+        volume_default=(
+            float(settings.ha_volume_default) if settings.ha_volume_default else None
+        ),
+        volume_terse=(
+            float(settings.ha_volume_terse) if settings.ha_volume_terse else None
+        ),
         enable_emojis=settings.enable_emojis,
     )
 
@@ -147,9 +152,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
                 # the dashboard doesn't show a stale warning after a rotation.
                 await ha_client.dismiss_credential_alert()
             else:
-                logger.error(
-                    "Credential check FAILED: %s — firing HA alert.", error
-                )
+                logger.error("Credential check FAILED: %s — firing HA alert.", error)
                 await ha_client.send_credential_alert(error)
 
             await asyncio.sleep(interval_seconds)
@@ -218,6 +221,7 @@ app, _settings, _processor, _incident_store = _build_app()
 
 # ── Webhook signature verification ───────────────────────────────────────────
 
+
 def _verify_signature(request: Request, body: bytes) -> bool:
     """
     Validate the X-Hub-Signature-256 header if WEBHOOK_SECRET is configured.
@@ -229,14 +233,19 @@ def _verify_signature(request: Request, body: bytes) -> bool:
     try:
         sig_header = request.headers.get("X-Hub-Signature-256", "")
         if not sig_header.startswith("sha256="):
-            logger.warning("Webhook request missing or malformed X-Hub-Signature-256 header")
+            logger.warning(
+                "Webhook request missing or malformed X-Hub-Signature-256 header"
+            )
             return False
 
-        expected = "sha256=" + hmac.new(
-            _settings.webhook_secret.encode("utf-8"),
-            body,
-            hashlib.sha256,
-        ).hexdigest()
+        expected = (
+            "sha256="
+            + hmac.new(
+                _settings.webhook_secret.encode("utf-8"),
+                body,
+                hashlib.sha256,
+            ).hexdigest()
+        )
 
         return hmac.compare_digest(sig_header, expected)
     except Exception:
@@ -260,6 +269,7 @@ def _verify_api_key(key: str | None) -> bool:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health", tags=["ops"])
 async def health_check():
@@ -328,16 +338,20 @@ async def invalidate_cache():
 
 # ── Incident dashboard ────────────────────────────────────────────────────────
 
+
 @app.get("/incidents", tags=["dashboard"])
 async def list_incidents(
     status: str | None = Query(
-        default=None, description="Filter by status: open, acknowledged, escalated, closed"
+        default=None,
+        description="Filter by status: open, acknowledged, escalated, closed",
     ),
     priority: str | None = Query(
         default=None, description="Filter by priority: P1, P2, P3, P4, P5"
     ),
     limit: int = Query(default=200, ge=1, le=1000, description="Max results"),
-    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(
+        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
+    ),
 ):
     """
     Return current incident state.  Requires ``INCIDENT_DASHBOARD_ENABLED=true``.
@@ -352,13 +366,17 @@ async def list_incidents(
             status_code=404,
             detail="Incident dashboard is disabled. Set INCIDENT_DASHBOARD_ENABLED=true in .env",
         )
-    incidents = await _incident_store.get_all(status=status, priority=priority, limit=limit)
+    incidents = await _incident_store.get_all(
+        status=status, priority=priority, limit=limit
+    )
     return JSONResponse(content={"incidents": incidents, "count": len(incidents)})
 
 
 @app.get("/incidents/summary", tags=["dashboard"])
 async def incident_summary(
-    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(
+        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
+    ),
 ):
     """Return aggregate incident counts by status and priority."""
     if not _verify_api_key(key):
@@ -375,7 +393,9 @@ async def incident_summary(
 @app.get("/incidents/{alert_id}", tags=["dashboard"])
 async def get_incident(
     alert_id: str = Path(..., description="Alert ID to look up"),
-    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(
+        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
+    ),
 ):
     """Return a single incident by alert ID."""
     if not _verify_api_key(key):
@@ -394,7 +414,9 @@ async def get_incident(
 @app.post("/incidents/{alert_id}/close", tags=["dashboard"])
 async def force_close_incident(
     alert_id: str = Path(..., description="Alert ID to force-close"),
-    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(
+        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
+    ),
 ):
     """
     Force-close an incident from the dashboard.
@@ -411,7 +433,9 @@ async def force_close_incident(
         )
     closed = await _incident_store.force_close(alert_id)
     if not closed:
-        raise HTTPException(status_code=404, detail="Incident not found or already closed")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or already closed"
+        )
     # Also dismiss HA notification and cancel TTS repeat.
     await _processor.ha_client.dismiss_notification(alert_id)
     _processor.cancel_tts_repeat(alert_id)
@@ -420,7 +444,9 @@ async def force_close_incident(
 
 @app.post("/incidents/sync", tags=["dashboard"])
 async def force_incident_sync(
-    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(
+        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
+    ),
 ):
     """Force an immediate sync of open alerts from JSM."""
     if not _verify_api_key(key):

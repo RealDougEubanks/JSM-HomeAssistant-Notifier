@@ -53,15 +53,15 @@ _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 
 # Map JSM action names to HA automation webhook config field names.
 _ACTION_WEBHOOK_MAP: dict[str, str] = {
-    "Create":        "ha_webhook_on_create",
-    "EscalateNext":  "ha_webhook_on_escalate",
-    "Acknowledge":   "ha_webhook_on_acknowledge",
-    "Close":         "ha_webhook_on_close",
-    "AddNote":       "ha_webhook_on_update",
+    "Create": "ha_webhook_on_create",
+    "EscalateNext": "ha_webhook_on_escalate",
+    "Acknowledge": "ha_webhook_on_acknowledge",
+    "Close": "ha_webhook_on_close",
+    "AddNote": "ha_webhook_on_update",
     "UnAcknowledge": "ha_webhook_on_update",
     "AssignOwnership": "ha_webhook_on_update",
-    "Seen":          "ha_webhook_on_update",
-    "SlaBreached":   "ha_webhook_on_sla_breach",
+    "Seen": "ha_webhook_on_update",
+    "SlaBreached": "ha_webhook_on_sla_breach",
 }
 
 
@@ -166,9 +166,7 @@ class AlertProcessor:
         for name in self.settings.check_oncall_schedule_names:
             schedule_id = await self.jsm_client.get_schedule_id(name)
             if not schedule_id:
-                logger.warning(
-                    "Schedule '%s' not found — skipping on-call check", name
-                )
+                logger.warning("Schedule '%s' not found — skipping on-call check", name)
                 continue
             if await self.jsm_client.is_on_call(
                 schedule_id, self.settings.oncall_cache_ttl_seconds
@@ -207,9 +205,7 @@ class AlertProcessor:
         if not self._player_routes:
             return self.ha_client.media_player
         now_time = datetime.now().time()
-        return resolve_player(
-            now_time, self._player_routes, self.ha_client.media_player
-        )
+        return resolve_player(now_time, self._player_routes, self.ha_client.media_player)
 
     # ── TTS repeat (pager mode) ──────────────────────────────────────────
 
@@ -221,7 +217,10 @@ class AlertProcessor:
         )
 
     async def _repeat_tts_loop(
-        self, alert: Any, action: str, target_entity: str,
+        self,
+        alert: Any,
+        action: str,
+        target_entity: str,
     ) -> None:
         """Background task: repeat TTS at intervals until cancelled or max reached."""
         interval = self.settings.tts_repeat_interval_seconds
@@ -231,20 +230,25 @@ class AlertProcessor:
         try:
             for i in range(max_repeats):
                 await asyncio.sleep(interval)
-                logger.info(
-                    "TTS repeat %d/%d for alert %s", i + 1, max_repeats, alert_id
-                )
+                logger.info("TTS repeat %d/%d for alert %s", i + 1, max_repeats, alert_id)
                 await self.ha_client.play_tts_alert(
-                    alert, action, target_entity=target_entity,
+                    alert,
+                    action,
+                    target_entity=target_entity,
                 )
-            logger.info("TTS repeat exhausted (%d repeats) for alert %s", max_repeats, alert_id)
+            logger.info(
+                "TTS repeat exhausted (%d repeats) for alert %s", max_repeats, alert_id
+            )
         except asyncio.CancelledError:
             logger.info("TTS repeat cancelled for alert %s", alert_id)
         finally:
             self._repeat_tasks.pop(alert_id, None)
 
     def _start_tts_repeat(
-        self, alert: Any, action: str, target_entity: str,
+        self,
+        alert: Any,
+        action: str,
+        target_entity: str,
     ) -> None:
         """Start a background repeat loop for this alert."""
         alert_id = alert.alertId
@@ -254,9 +258,7 @@ class AlertProcessor:
         if old_task and not old_task.done():
             old_task.cancel()
 
-        task = asyncio.create_task(
-            self._repeat_tts_loop(alert, action, target_entity)
-        )
+        task = asyncio.create_task(self._repeat_tts_loop(alert, action, target_entity))
         self._repeat_tasks[alert_id] = task
         logger.info("Started TTS repeat for alert %s", alert_id)
 
@@ -282,7 +284,9 @@ class AlertProcessor:
 
         # Fire persistent notifications (one per alert).
         if self._batch_notif_coros:
-            results = await asyncio.gather(*self._batch_notif_coros, return_exceptions=True)
+            results = await asyncio.gather(
+                *self._batch_notif_coros, return_exceptions=True
+            )
             for r in results:
                 if isinstance(r, Exception):
                     logger.error("Batch persistent notification raised: %s", r)
@@ -291,11 +295,15 @@ class AlertProcessor:
         # Single batched TTS.
         if len(alerts) == 1:
             await self.ha_client.play_tts_alert(
-                alerts[0], actions[0], target_entity=target_entity,
+                alerts[0],
+                actions[0],
+                target_entity=target_entity,
             )
         else:
             await self.ha_client.play_tts_batch(
-                alerts, actions, target_entity=target_entity,
+                alerts,
+                actions,
+                target_entity=target_entity,
             )
 
         # Start repeats for qualifying alerts.
@@ -307,7 +315,10 @@ class AlertProcessor:
         logger.info("Flushed batch of %d alert(s)", len(alerts))
 
     def _enqueue_batch(
-        self, alert: Any, action: str, notif_coro: Any,
+        self,
+        alert: Any,
+        action: str,
+        notif_coro: Any,
     ) -> None:
         """Add an alert to the batch queue and start/reset the batch timer."""
         self._batch_queue.append((alert, action))
@@ -347,7 +358,8 @@ class AlertProcessor:
 
         logger.info(
             "Firing HA automation webhook(s) for action=%s alert_id=%s",
-            payload.action, payload.alert.alertId,
+            payload.action,
+            payload.alert.alertId,
         )
         await self.ha_client.fire_webhooks(webhook_ids, data)
 
@@ -364,10 +376,10 @@ class AlertProcessor:
         """
         result: dict = {
             "alert_id": payload.alert.alertId,
-            "action":   payload.action,
+            "action": payload.action,
             "notified": False,
             "dismissed": False,
-            "reason":   "",
+            "reason": "",
         }
 
         # ── Fire HA automation webhooks (for ALL actions) ─────────────────
@@ -429,9 +441,7 @@ class AlertProcessor:
         result["reason"] = reason
 
         if not notify:
-            logger.info(
-                "No notification for alert %s: %s", payload.alert.alertId, reason
-            )
+            logger.info("No notification for alert %s: %s", payload.alert.alertId, reason)
             return result
 
         # ── Determine announcement verbosity based on time windows ─────────
@@ -447,10 +457,7 @@ class AlertProcessor:
             )
             silent = False
 
-        terse = (
-            not silent
-            and in_any_window(now_time, self.settings._terse_windows)
-        )
+        terse = not silent and in_any_window(now_time, self.settings._terse_windows)
 
         if silent:
             result["announcement_mode"] = "silent"
@@ -490,8 +497,10 @@ class AlertProcessor:
             # Immediate mode: TTS + persistent notification concurrently.
             tts_result, notif_result = await asyncio.gather(
                 self.ha_client.play_tts_alert(
-                    payload.alert, payload.action,
-                    terse=terse, target_entity=target_entity,
+                    payload.alert,
+                    payload.action,
+                    terse=terse,
+                    target_entity=target_entity,
                 ),
                 notif_coro,
                 return_exceptions=True,
@@ -504,7 +513,9 @@ class AlertProcessor:
             # Start TTS repeat if enabled for this priority.
             if self._should_repeat(payload.alert.priority):
                 self._start_tts_repeat(
-                    payload.alert, payload.action, target_entity,
+                    payload.alert,
+                    payload.action,
+                    target_entity,
                 )
 
         result["notified"] = True

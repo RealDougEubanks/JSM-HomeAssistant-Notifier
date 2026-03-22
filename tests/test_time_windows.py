@@ -1,4 +1,5 @@
 """Tests for time window parsing and matching."""
+
 from __future__ import annotations
 
 from datetime import time
@@ -14,6 +15,7 @@ from src.time_windows import (
 )
 
 # ── parse_windows ────────────────────────────────────────────────────────────
+
 
 def test_parse_empty_string():
     assert parse_windows("") == []
@@ -58,6 +60,7 @@ def test_parse_leading_zero_optional():
 
 # ── in_window — same-day ────────────────────────────────────────────────────
 
+
 def test_same_day_inside():
     w = (time(9, 0), time(17, 0))
     assert in_window(time(12, 0), w) is True
@@ -85,6 +88,7 @@ def test_same_day_after():
 
 
 # ── in_window — cross-midnight ──────────────────────────────────────────────
+
 
 def test_cross_midnight_late_night():
     w = (time(22, 30), time(7, 0))
@@ -119,6 +123,7 @@ def test_cross_midnight_just_before_end():
 
 # ── in_any_window ───────────────────────────────────────────────────────────
 
+
 def test_in_any_empty():
     assert in_any_window(time(12, 0), []) is False
 
@@ -134,6 +139,7 @@ def test_in_any_no_match():
 
 
 # ── parse_player_routing ─────────────────────────────────────────────────────
+
 
 def test_parse_routing_empty():
     assert parse_player_routing("") == []
@@ -162,15 +168,24 @@ def test_parse_routing_invalid_no_at():
 
 # ── resolve_player ───────────────────────────────────────────────────────────
 
+
 def test_resolve_player_matches():
     routes = [("media_player.bedroom", (time(22, 0), time(8, 0)))]
-    assert resolve_player(time(23, 0), routes, "media_player.default") == "media_player.bedroom"
+    assert (
+        resolve_player(time(23, 0), routes, "media_player.default")
+        == "media_player.bedroom"
+    )
 
 
 def test_resolve_player_falls_back():
     routes = [("media_player.bedroom", (time(22, 0), time(8, 0)))]
-    assert resolve_player(time(12, 0), routes, "media_player.default") == "media_player.default"
+    assert (
+        resolve_player(time(12, 0), routes, "media_player.default")
+        == "media_player.default"
+    )
 
 
 def test_resolve_player_empty_routes():
-    assert resolve_player(time(12, 0), [], "media_player.default") == "media_player.default"
+    assert (
+        resolve_player(time(12, 0), [], "media_player.default") == "media_player.default"
+    )

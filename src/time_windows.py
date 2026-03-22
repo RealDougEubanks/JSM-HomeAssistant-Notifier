@@ -108,7 +108,9 @@ def parse_player_routing(raw: str) -> list[PlayerRoute]:
 
 
 def resolve_player(
-    t: time, routes: list[PlayerRoute], default: str,
+    t: time,
+    routes: list[PlayerRoute],
+    default: str,
 ) -> str:
     """Return the media player entity for the given time, or the default."""
     for entity, window in routes:
