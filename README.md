@@ -1015,6 +1015,24 @@ docker pull realdougeubanks/jsm-ha-notifier:latest
 
 If Docker Hub credentials are not set, the workflow gracefully skips the Docker Hub login and only pushes to GHCR.
 
+#### Image signing and provenance
+
+Every image pushed by the release workflow is:
+
+1. **Signed with cosign** (Sigstore keyless / OIDC) — proves the image was built by this GitHub Actions workflow
+2. **Attested with SLSA Build Level 2** — GitHub's native build provenance attestation
+
+To verify an image before pulling:
+
+```bash
+# Install cosign: https://docs.sigstore.dev/cosign/system_config/installation/
+cosign verify ghcr.io/realdougeubanks/jsm-ha-notifier:latest \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp github.com/RealDougEubanks/JSM-HomeAssistant-Notifier
+```
+
+This confirms the image was built from this repository's GitHub Actions — not tampered with after the fact.
+
 #### Updating `docker-compose.yml` to use a published image
 
 After the image has been published, edit `docker-compose.yml`:
