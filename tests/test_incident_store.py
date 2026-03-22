@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,7 +16,6 @@ from src.incident_store import IncidentStore
 from src.jsm_client import JSMClient
 from tests.conftest import make_alert
 
-
 # ── Incident store ────────────────────────────────────────────────────────────
 
 
@@ -24,10 +24,8 @@ def db_path():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     yield path
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(path)
-    except OSError:
-        pass
 
 
 @pytest.fixture
@@ -131,14 +129,14 @@ async def test_close_store(store: IncidentStore):
 
 
 def _settings(**kwargs) -> Settings:
-    defaults = dict(
-        jsm_cloud_id="test-cloud-id",
-        jsm_username="test@example.com",
-        jsm_api_token="test-token",
-        jsm_my_user_id="my-user-id",
-        ha_url="https://ha.example.com",
-        ha_token="ha-test-token",
-    )
+    defaults = {
+        "jsm_cloud_id": "test-cloud-id",
+        "jsm_username": "test@example.com",
+        "jsm_api_token": "test-token",
+        "jsm_my_user_id": "my-user-id",
+        "ha_url": "https://ha.example.com",
+        "ha_token": "ha-test-token",
+    }
     defaults.update(kwargs)
     return Settings(**defaults)
 

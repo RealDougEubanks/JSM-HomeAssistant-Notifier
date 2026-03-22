@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,7 +11,6 @@ from src.config import Settings
 from src.ha_client import HAClient
 from src.jsm_client import JSMClient
 from tests.conftest import make_alert
-
 
 # ── HAClient format tests ───────────────────────────────────────────────────
 
@@ -96,16 +95,16 @@ def _make_processor(
 
 
 def _settings_with(**kwargs) -> Settings:
-    defaults = dict(
-        jsm_cloud_id="test-cloud-id",
-        jsm_username="test@example.com",
-        jsm_api_token="test-token",
-        jsm_my_user_id="my-user-id",
-        check_oncall_schedule_names=["Cloud Engineering On-Call Schedule"],
-        always_notify_schedule_names=["Internal Systems_schedule"],
-        ha_url="https://ha.example.com",
-        ha_token="ha-test-token",
-    )
+    defaults = {
+        "jsm_cloud_id": "test-cloud-id",
+        "jsm_username": "test@example.com",
+        "jsm_api_token": "test-token",
+        "jsm_my_user_id": "my-user-id",
+        "check_oncall_schedule_names": ["Cloud Engineering On-Call Schedule"],
+        "always_notify_schedule_names": ["Internal Systems_schedule"],
+        "ha_url": "https://ha.example.com",
+        "ha_token": "ha-test-token",
+    }
     defaults.update(kwargs)
     return Settings(**defaults)
 

@@ -18,7 +18,7 @@ to subclass both `EnvSettingsSource` and `DotEnvSettingsSource`, intercept
 from __future__ import annotations
 
 import json
-from typing import Any, List, Tuple, Type
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic.fields import FieldInfo
@@ -102,10 +102,10 @@ class Settings(BaseSettings):
     # Accepts a plain comma-separated string or a JSON array in .env:
     #   ALWAYS_NOTIFY_SCHEDULE_NAMES=Internal Systems_schedule
     #   ALWAYS_NOTIFY_SCHEDULE_NAMES=["Internal Systems_schedule","Another"]
-    always_notify_schedule_names: List[str] = []
+    always_notify_schedule_names: list[str] = []
 
     # Schedules listed here only notify when you are currently on-call.
-    check_oncall_schedule_names: List[str] = []
+    check_oncall_schedule_names: list[str] = []
 
     # ── Home Assistant ───────────────────────────────────────────────────────
     ha_url: str
@@ -234,13 +234,13 @@ class Settings(BaseSettings):
     # The custom sources above handle the same conversion for .env / env vars.
     @field_validator("always_notify_schedule_names", "check_oncall_schedule_names", mode="before")
     @classmethod
-    def _coerce_csv(cls, v: object) -> List[str]:
+    def _coerce_csv(cls, v: object) -> list[str]:
         if isinstance(v, str):
             return _parse_csv_or_json("always_notify_schedule_names", v)  # type: ignore[arg-type]
         return v  # type: ignore[return-value]
 
     @model_validator(mode="after")
-    def _parse_derived_fields(self) -> "Settings":
+    def _parse_derived_fields(self) -> Settings:
         object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
         object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
         return self
@@ -249,12 +249,12 @@ class Settings(BaseSettings):
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls: Type[BaseSettings],
+        settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
             _CsvAwareEnvSource(settings_cls),

@@ -19,7 +19,7 @@ import logging
 import re
 import string
 import urllib.parse
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _REQUEST_TIMEOUT = 10.0
 
 # Priority → (spoken label, emoji)
-_PRIORITY_META: Dict[str, tuple[str, str]] = {
+_PRIORITY_META: dict[str, tuple[str, str]] = {
     "P1": ("Priority 1, Critical",   "🔴"),
     "P2": ("Priority 2, High",       "🟠"),
     "P3": ("Priority 3, Medium",     "🟡"),
@@ -119,8 +119,8 @@ class HAClient:
             "Alert: {message}.{entity_part}{description_part}"
         ),
         terse_announcement_format: str = "{action_prefix} {priority} alert. {message}.",
-        volume_default: Optional[float] = None,
-        volume_terse: Optional[float] = None,
+        volume_default: float | None = None,
+        volume_terse: float | None = None,
         enable_emojis: bool = True,
     ) -> None:
         self.ha_url = ha_url.rstrip("/")
@@ -158,7 +158,7 @@ class HAClient:
         """Return *emoji* when emojis are enabled, otherwise empty string."""
         return emoji if self.enable_emojis else ""
 
-    def _format_vars(self, alert: Any, action: str) -> Dict[str, str]:
+    def _format_vars(self, alert: Any, action: str) -> dict[str, str]:
         """Return the common template variables for announcement formats.
 
         All alert-sourced fields are sanitized to strip shell metacharacters
@@ -202,7 +202,7 @@ class HAClient:
         variables = self._format_vars(alert, action)
         return _safe_fmt.format(self.terse_announcement_format, **variables)
 
-    def _build_media_metadata(self, alert: Any, action: str) -> Dict[str, Any]:
+    def _build_media_metadata(self, alert: Any, action: str) -> dict[str, Any]:
         """Build the rich metadata block shown in the HA media player UI."""
         _, emoji = _PRIORITY_META.get(alert.priority, ("Unknown", "⚠️"))
 
@@ -239,7 +239,7 @@ class HAClient:
     # ── HA service calls ──────────────────────────────────────────────────
 
     async def _call_service(
-        self, domain: str, service: str, payload: Dict[str, Any]
+        self, domain: str, service: str, payload: dict[str, Any]
     ) -> bool:
         """POST to /api/services/{domain}/{service}.  Returns True on success."""
         url = f"{self.ha_url}/api/services/{domain}/{service}"
@@ -276,7 +276,7 @@ class HAClient:
         action: str = "Create",
         *,
         terse: bool = False,
-        target_entity: Optional[str] = None,
+        target_entity: str | None = None,
     ) -> bool:
         """
         Play a TTS announcement on the configured media player with rich
@@ -299,7 +299,7 @@ class HAClient:
         content_id = self._build_tts_content_id(tts_text)
         metadata = self._build_media_metadata(alert, action)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "entity_id": entity,
             "media_content_id": content_id,
             "media_content_type": "provider",
@@ -330,7 +330,7 @@ class HAClient:
         return await self._call_service("media_player", "play_media", payload)
 
     async def play_tts_batch(
-        self, alerts: list[Any], actions: list[str], *, target_entity: Optional[str] = None,
+        self, alerts: list[Any], actions: list[str], *, target_entity: str | None = None,
     ) -> bool:
         """Play a batched announcement for multiple alerts."""
         entity = target_entity or self.media_player
@@ -338,7 +338,7 @@ class HAClient:
             await self._set_volume(entity, self.volume_default)
 
         parts = [f"{len(alerts)} new alerts."]
-        for alert, action in zip(alerts, actions):
+        for alert, action in zip(alerts, actions, strict=False):
             variables = self._format_vars(alert, action)
             parts.append(f"{variables['priority']}: {alert.message}.")
 
@@ -349,7 +349,7 @@ class HAClient:
         metadata = self._build_media_metadata(alerts[0], actions[0])
         metadata["title"] = f"Batch: {len(alerts)} alerts"
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "entity_id": entity,
             "media_content_id": content_id,
             "media_content_type": "provider",
@@ -420,7 +420,7 @@ class HAClient:
     async def play_tts_message(self, text: str) -> bool:
         """Play an arbitrary TTS string — used for system alerts like token expiry."""
         content_id = self._build_tts_content_id(text)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "entity_id": self.media_player,
             "media_content_id": content_id,
             "media_content_type": "provider",
@@ -496,7 +496,7 @@ class HAClient:
     # Allowed characters in HA webhook IDs.
     _WEBHOOK_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,200}$")
 
-    async def fire_webhook(self, webhook_id: str, data: Dict[str, Any]) -> bool:
+    async def fire_webhook(self, webhook_id: str, data: dict[str, Any]) -> bool:
         """
         POST to HA's webhook trigger endpoint.
 
@@ -521,7 +521,7 @@ class HAClient:
             return False
 
     async def fire_webhooks(
-        self, webhook_ids: str, data: Dict[str, Any],
+        self, webhook_ids: str, data: dict[str, Any],
     ) -> None:
         """Fire one or more comma-separated HA webhook IDs."""
         if not webhook_ids.strip():

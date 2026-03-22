@@ -4,10 +4,7 @@ were crashing pydantic-settings with a JSONDecodeError before this fix.
 """
 from __future__ import annotations
 
-import pytest
-
 from src.config import Settings, _parse_csv_or_json
-
 
 # ── Unit tests for the CSV parser helper ──────────────────────────────────────
 

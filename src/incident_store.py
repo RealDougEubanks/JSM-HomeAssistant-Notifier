@@ -22,8 +22,8 @@ import asyncio
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class IncidentStore:
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -73,9 +73,9 @@ class IncidentStore:
 
     # ── Write operations ──────────────────────────────────────────────────
 
-    def _upsert_sync(self, alert: Dict[str, Any], action: str) -> None:
+    def _upsert_sync(self, alert: dict[str, Any], action: str) -> None:
         conn = self._get_conn()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         alert_id = alert.get("alertId", alert.get("alert_id", "unknown"))
         message = alert.get("message", "")
@@ -139,14 +139,14 @@ class IncidentStore:
         )
         conn.commit()
 
-    async def upsert(self, alert: Dict[str, Any], action: str) -> None:
+    async def upsert(self, alert: dict[str, Any], action: str) -> None:
         """Insert or update an incident from a webhook event."""
         await self._run(self._upsert_sync, alert, action)
 
-    def _bulk_upsert_sync(self, alerts: List[Dict[str, Any]]) -> int:
+    def _bulk_upsert_sync(self, alerts: list[dict[str, Any]]) -> int:
         """Upsert alerts from a JSM API sync.  Returns count of rows affected."""
         conn = self._get_conn()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         count = 0
 
         for alert in alerts:
@@ -185,7 +185,7 @@ class IncidentStore:
         conn.commit()
         return count
 
-    async def bulk_upsert(self, alerts: List[Dict[str, Any]]) -> int:
+    async def bulk_upsert(self, alerts: list[dict[str, Any]]) -> int:
         """Upsert alerts from a JSM API sync."""
         return await self._run(self._bulk_upsert_sync, alerts)
 
@@ -193,13 +193,13 @@ class IncidentStore:
 
     def _get_all_sync(
         self,
-        status: Optional[str] = None,
-        priority: Optional[str] = None,
+        status: str | None = None,
+        priority: str | None = None,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         conn = self._get_conn()
         query = "SELECT * FROM incidents WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
 
         if status:
             query += " AND status = ?"
@@ -216,25 +216,25 @@ class IncidentStore:
 
     async def get_all(
         self,
-        status: Optional[str] = None,
-        priority: Optional[str] = None,
+        status: str | None = None,
+        priority: str | None = None,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return incidents, optionally filtered by status and/or priority."""
         return await self._run(self._get_all_sync, status, priority, limit)
 
-    def _get_one_sync(self, alert_id: str) -> Optional[Dict[str, Any]]:
+    def _get_one_sync(self, alert_id: str) -> dict[str, Any] | None:
         conn = self._get_conn()
         row = conn.execute(
             "SELECT * FROM incidents WHERE alert_id = ?", (alert_id,)
         ).fetchone()
         return dict(row) if row else None
 
-    async def get_one(self, alert_id: str) -> Optional[Dict[str, Any]]:
+    async def get_one(self, alert_id: str) -> dict[str, Any] | None:
         """Return a single incident by alert_id."""
         return await self._run(self._get_one_sync, alert_id)
 
-    def _get_summary_sync(self) -> Dict[str, Any]:
+    def _get_summary_sync(self) -> dict[str, Any]:
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT status, COUNT(*) as count FROM incidents GROUP BY status"
@@ -257,7 +257,7 @@ class IncidentStore:
             "by_priority": by_priority,
         }
 
-    async def get_summary(self) -> Dict[str, Any]:
+    async def get_summary(self) -> dict[str, Any]:
         """Return aggregate counts for the dashboard."""
         return await self._run(self._get_summary_sync)
 
@@ -265,7 +265,7 @@ class IncidentStore:
 
     def _force_close_sync(self, alert_id: str) -> bool:
         conn = self._get_conn()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         cur = conn.execute(
             """
             UPDATE incidents
@@ -286,7 +286,7 @@ class IncidentStore:
     def _cleanup_sync(self, open_days: int, closed_days: int) -> int:
         """Delete incidents older than the configured retention periods."""
         conn = self._get_conn()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         deleted = 0
 
         if closed_days > 0:

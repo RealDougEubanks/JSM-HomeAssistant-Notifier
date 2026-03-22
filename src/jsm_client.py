@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -41,9 +41,9 @@ class JSMClient:
         self.my_user_id = my_user_id
 
         # name → schedule_id  (populated lazily, never invalidated)
-        self._schedule_id_cache: Dict[str, str] = {}
+        self._schedule_id_cache: dict[str, str] = {}
         # schedule_id → (is_on_call, fetched_at_timestamp)
-        self._oncall_cache: Dict[str, Tuple[bool, float]] = {}
+        self._oncall_cache: dict[str, tuple[bool, float]] = {}
 
         # Persistent HTTP client — reused across requests to avoid socket churn.
         self._http: httpx.AsyncClient = httpx.AsyncClient(trust_env=False)
@@ -54,7 +54,7 @@ class JSMClient:
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
-    def _base_headers(self) -> Dict[str, str]:
+    def _base_headers(self) -> dict[str, str]:
         return {"Accept": "application/json"}
 
     def _schedules_url(self) -> str:
@@ -65,13 +65,13 @@ class JSMClient:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    async def get_all_schedules(self) -> List[Dict[str, Any]]:
+    async def get_all_schedules(self) -> list[dict[str, Any]]:
         """
         Return all schedules visible to the configured API token.
         Handles JSM's cursor-based pagination automatically.
         """
-        url: Optional[str] = self._schedules_url()
-        schedules: List[Dict[str, Any]] = []
+        url: str | None = self._schedules_url()
+        schedules: list[dict[str, Any]] = []
 
         while url:
             response = await self._http.get(
@@ -93,7 +93,7 @@ class JSMClient:
         logger.debug("Fetched %d schedules from JSM", len(schedules))
         return schedules
 
-    async def get_schedule_id(self, schedule_name: str) -> Optional[str]:
+    async def get_schedule_id(self, schedule_name: str) -> str | None:
         """
         Return the schedule ID for *schedule_name*, refreshing the local
         name→ID cache from the API if the name is not yet known.
@@ -249,7 +249,7 @@ class JSMClient:
             logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
             return False, msg
 
-    async def get_alert_details(self, alert_id: str) -> Optional[Dict[str, Any]]:
+    async def get_alert_details(self, alert_id: str) -> dict[str, Any] | None:
         """
         Fetch full alert details from JSM, including extra context like
         responders, teams, tags, and custom details.
@@ -272,7 +272,7 @@ class JSMClient:
             logger.warning("Failed to fetch alert details for %s: %s", alert_id, exc)
             return None
 
-    async def list_open_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_open_alerts(self, limit: int = 100) -> list[dict[str, Any]]:
         """
         Fetch open alerts from the JSM Ops API.
 
