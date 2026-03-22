@@ -30,7 +30,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .config import Settings
 from .ha_client import HAClient
@@ -52,7 +52,7 @@ _MAX_DEDUP_CACHE_SIZE = 10_000
 _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 
 # Map JSM action names to HA automation webhook config field names.
-_ACTION_WEBHOOK_MAP: Dict[str, str] = {
+_ACTION_WEBHOOK_MAP: dict[str, str] = {
     "Create":        "ha_webhook_on_create",
     "EscalateNext":  "ha_webhook_on_escalate",
     "Acknowledge":   "ha_webhook_on_acknowledge",
@@ -78,14 +78,14 @@ class AlertProcessor:
         settings: Settings,
         jsm_client: JSMClient,
         ha_client: HAClient,
-        incident_store: Optional[IncidentStore] = None,
+        incident_store: IncidentStore | None = None,
     ) -> None:
         self.settings = settings
         self.jsm_client = jsm_client
         self.ha_client = ha_client
         self.incident_store = incident_store
         # alert_key → epoch timestamp of last processing
-        self._dedup_cache: Dict[str, float] = {}
+        self._dedup_cache: dict[str, float] = {}
 
         # Parsed derived config.
         self._player_routes = parse_player_routing(settings.ha_media_player_routing)
@@ -95,12 +95,12 @@ class AlertProcessor:
         self._repeat_priorities = _parse_priority_set(settings.tts_repeat_priorities)
 
         # Batching state.
-        self._batch_queue: List[Tuple[Any, str]] = []  # (alert, action)
-        self._batch_task: Optional[asyncio.Task[None]] = None
-        self._batch_notif_coros: List[Any] = []  # persistent-notif coros to run
+        self._batch_queue: list[tuple[Any, str]] = []  # (alert, action)
+        self._batch_task: asyncio.Task[None] | None = None
+        self._batch_notif_coros: list[Any] = []  # persistent-notif coros to run
 
         # TTS repeat state: alert_id → asyncio.Task
-        self._repeat_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._repeat_tasks: dict[str, asyncio.Task[None]] = {}
 
     # ── Deduplication ─────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ class AlertProcessor:
 
         return False
 
-    async def _on_call_for_any_schedule(self) -> Tuple[bool, Optional[str]]:
+    async def _on_call_for_any_schedule(self) -> tuple[bool, str | None]:
         """
         Check every schedule in check_oncall_schedule_names.
         Returns (True, schedule_name) on first match, (False, None) otherwise.
@@ -179,7 +179,7 @@ class AlertProcessor:
 
     async def _should_notify(
         self, payload: JSMWebhookPayload, always_notify: bool
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Return (notify: bool, reason: str)."""
 
         if payload.action not in _NOTIFY_ACTIONS:
@@ -299,7 +299,7 @@ class AlertProcessor:
             )
 
         # Start repeats for qualifying alerts.
-        for alert, action in zip(alerts, actions):
+        for alert, action in zip(alerts, actions, strict=False):
             if self._should_repeat(alert.priority):
                 self._start_tts_repeat(alert, action, target_entity)
 
@@ -376,7 +376,7 @@ class AlertProcessor:
         # ── Update incident store (for ALL actions) ───────────────────────
         if self.incident_store:
             try:
-                alert_dict: Dict[str, Any] = {
+                alert_dict: dict[str, Any] = {
                     "alertId": payload.alert.alertId,
                     "message": payload.alert.message,
                     "priority": payload.alert.priority,

@@ -13,7 +13,6 @@ from src.time_windows import (
     resolve_player,
 )
 
-
 # ── parse_windows ────────────────────────────────────────────────────────────
 
 def test_parse_empty_string():

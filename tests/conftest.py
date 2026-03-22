@@ -10,7 +10,6 @@ from src.ha_client import HAClient
 from src.jsm_client import JSMClient
 from src.models import AlertDetails, AlertRecipient, JSMWebhookPayload
 
-
 # ── Common alert payloads ─────────────────────────────────────────────────────
 
 def make_alert(

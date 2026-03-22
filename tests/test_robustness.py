@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.alert_processor import AlertProcessor, _MAX_DEDUP_CACHE_SIZE
+from src.alert_processor import _MAX_DEDUP_CACHE_SIZE, AlertProcessor
 from src.config import Settings
 from src.ha_client import HAClient
 from src.jsm_client import JSMClient
@@ -14,16 +14,16 @@ from tests.conftest import make_alert
 
 
 def _settings(**kwargs) -> Settings:
-    defaults = dict(
-        jsm_cloud_id="test-cloud-id",
-        jsm_username="test@example.com",
-        jsm_api_token="test-token",
-        jsm_my_user_id="my-user-id",
-        check_oncall_schedule_names=["Cloud Engineering On-Call Schedule"],
-        always_notify_schedule_names=["Internal Systems_schedule"],
-        ha_url="https://ha.example.com",
-        ha_token="ha-test-token",
-    )
+    defaults = {
+        "jsm_cloud_id": "test-cloud-id",
+        "jsm_username": "test@example.com",
+        "jsm_api_token": "test-token",
+        "jsm_my_user_id": "my-user-id",
+        "check_oncall_schedule_names": ["Cloud Engineering On-Call Schedule"],
+        "always_notify_schedule_names": ["Internal Systems_schedule"],
+        "ha_url": "https://ha.example.com",
+        "ha_token": "ha-test-token",
+    }
     defaults.update(kwargs)
     return Settings(**defaults)
 

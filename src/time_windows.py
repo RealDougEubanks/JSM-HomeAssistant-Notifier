@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import re
 from datetime import time
-from typing import List, Tuple
 
 # HH:MM with optional leading zero
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 
-Window = Tuple[time, time]
+Window = tuple[time, time]
 
 
 def _parse_time(s: str) -> time:
@@ -33,7 +32,7 @@ def _parse_time(s: str) -> time:
     return time(h, mi)
 
 
-def parse_windows(raw: str) -> List[Window]:
+def parse_windows(raw: str) -> list[Window]:
     """
     Parse a comma-separated list of ``"HH:MM-HH:MM"`` windows.
 
@@ -42,7 +41,7 @@ def parse_windows(raw: str) -> List[Window]:
     raw = raw.strip()
     if not raw:
         return []
-    windows: List[Window] = []
+    windows: list[Window] = []
     for token in raw.split(","):
         token = token.strip()
         if not token:
@@ -67,17 +66,17 @@ def in_window(t: time, window: Window) -> bool:
         return t >= start or t < end
 
 
-def in_any_window(t: time, windows: List[Window]) -> bool:
+def in_any_window(t: time, windows: list[Window]) -> bool:
     """Return True if *t* falls inside any of the given windows."""
     return any(in_window(t, w) for w in windows)
 
 
 # ── Media player routing ─────────────────────────────────────────────────
 
-PlayerRoute = Tuple[str, Window]  # (entity_id, time_window)
+PlayerRoute = tuple[str, Window]  # (entity_id, time_window)
 
 
-def parse_player_routing(raw: str) -> List[PlayerRoute]:
+def parse_player_routing(raw: str) -> list[PlayerRoute]:
     """
     Parse a comma-separated list of ``"entity@HH:MM-HH:MM"`` routes.
 
@@ -86,7 +85,7 @@ def parse_player_routing(raw: str) -> List[PlayerRoute]:
     raw = raw.strip()
     if not raw:
         return []
-    routes: List[PlayerRoute] = []
+    routes: list[PlayerRoute] = []
     for token in raw.split(","):
         token = token.strip()
         if not token:
@@ -109,7 +108,7 @@ def parse_player_routing(raw: str) -> List[PlayerRoute]:
 
 
 def resolve_player(
-    t: time, routes: List[PlayerRoute], default: str,
+    t: time, routes: list[PlayerRoute], default: str,
 ) -> str:
     """Return the media player entity for the given time, or the default."""
     for entity, window in routes:

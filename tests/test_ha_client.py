@@ -1,14 +1,13 @@
 """Tests for the Home Assistant client: TTS text, metadata, and API calls."""
 from __future__ import annotations
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from src.ha_client import HAClient
 from src.models import AlertDetails
 from tests.conftest import make_alert
-
 
 # ── TTS text building ─────────────────────────────────────────────────────────
 

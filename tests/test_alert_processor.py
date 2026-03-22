@@ -5,7 +5,7 @@ All external I/O (JSM API + HA API) is mocked so tests run offline and fast.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,7 +14,6 @@ from src.config import Settings
 from src.ha_client import HAClient
 from src.jsm_client import JSMClient
 from tests.conftest import make_alert
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

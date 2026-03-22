@@ -9,7 +9,7 @@ new fields.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class AlertSource(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    name: Optional[str] = None
-    type: Optional[str] = None
+    name: str | None = None
+    type: str | None = None
 
 
 class AlertDetails(BaseModel):
@@ -26,19 +26,19 @@ class AlertDetails(BaseModel):
 
     alertId: str
     message: str
-    alias: Optional[str] = None
-    description: Optional[str] = None
+    alias: str | None = None
+    description: str | None = None
     priority: str = "P3"
-    source: Optional[str] = None
-    entity: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
-    details: Dict[str, Any] = Field(default_factory=dict)
-    responders: List[Dict[str, Any]] = Field(default_factory=list)
-    teams: List[Dict[str, Any]] = Field(default_factory=list)
-    createdAt: Optional[int] = None
-    updatedAt: Optional[int] = None
+    source: str | None = None
+    entity: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+    responders: list[dict[str, Any]] = Field(default_factory=list)
+    teams: list[dict[str, Any]] = Field(default_factory=list)
+    createdAt: int | None = None
+    updatedAt: int | None = None
     # Integration / username that created the alert
-    username: Optional[str] = None
+    username: str | None = None
 
 
 class AlertRecipient(BaseModel):
@@ -46,9 +46,9 @@ class AlertRecipient(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    name: Optional[str] = None
-    id: Optional[str] = None
-    type: Optional[str] = None  # "user" | "team" | "schedule"
+    name: str | None = None
+    id: str | None = None
+    type: str | None = None  # "user" | "team" | "schedule"
 
 
 class JSMWebhookPayload(BaseModel):
@@ -69,6 +69,6 @@ class JSMWebhookPayload(BaseModel):
 
     action: str
     alert: AlertDetails
-    source: Optional[AlertSource] = None
+    source: AlertSource | None = None
     # Who this notification was sent to (populated for escalation actions)
-    recipient: Optional[AlertRecipient] = None
+    recipient: AlertRecipient | None = None

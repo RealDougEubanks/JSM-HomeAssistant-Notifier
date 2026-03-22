@@ -31,19 +31,13 @@ import asyncio
 import hashlib
 import hmac
 import logging
-import sys
-from contextlib import asynccontextmanager
-from typing import Optional
-
 import re
 import secrets
+import sys
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
-
-# Maximum allowed request body size (1 MB).  JSM webhook payloads are typically
-# a few KB; anything larger is likely malicious or malformed.
-_MAX_BODY_BYTES = 1_048_576
 
 from .alert_processor import AlertProcessor
 from .config import Settings
@@ -51,6 +45,10 @@ from .ha_client import HAClient
 from .incident_store import IncidentStore
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
+
+# Maximum allowed request body size (1 MB).  JSM webhook payloads are typically
+# a few KB; anything larger is likely malicious or malformed.
+_MAX_BODY_BYTES = 1_048_576
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -65,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 # ── Application bootstrap ─────────────────────────────────────────────────────
 
-def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentStore]]:
+def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | None]:
     settings = Settings()  # Reads from .env / env vars
 
     jsm_client = JSMClient(
@@ -93,7 +91,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentSt
     )
 
     # ── Incident dashboard (optional) ────────────────────────────────────
-    incident_store: Optional[IncidentStore] = None
+    incident_store: IncidentStore | None = None
     if settings.incident_dashboard_enabled:
         incident_store = IncidentStore(settings.incident_db_path)
         logger.info(
@@ -189,16 +187,12 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, Optional[IncidentSt
             yield
         finally:
             cred_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await cred_task
-            except asyncio.CancelledError:
-                pass
             if sync_task:
                 sync_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await sync_task
-                except asyncio.CancelledError:
-                    pass
             # Close persistent HTTP clients and stores.
             await jsm_client.aclose()
             await ha_client.aclose()
@@ -251,7 +245,7 @@ def _verify_signature(request: Request, body: bytes) -> bool:
         return False
 
 
-def _verify_api_key(key: Optional[str]) -> bool:
+def _verify_api_key(key: str | None) -> bool:
     """
     Check the ``?key=`` query parameter against WEBHOOK_API_KEY.
     Returns True if no key is configured (disabled) or if the key matches.
@@ -336,14 +330,14 @@ async def invalidate_cache():
 
 @app.get("/incidents", tags=["dashboard"])
 async def list_incidents(
-    status: Optional[str] = Query(
+    status: str | None = Query(
         default=None, description="Filter by status: open, acknowledged, escalated, closed"
     ),
-    priority: Optional[str] = Query(
+    priority: str | None = Query(
         default=None, description="Filter by priority: P1, P2, P3, P4, P5"
     ),
     limit: int = Query(default=200, ge=1, le=1000, description="Max results"),
-    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """
     Return current incident state.  Requires ``INCIDENT_DASHBOARD_ENABLED=true``.
@@ -364,7 +358,7 @@ async def list_incidents(
 
 @app.get("/incidents/summary", tags=["dashboard"])
 async def incident_summary(
-    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """Return aggregate incident counts by status and priority."""
     if not _verify_api_key(key):
@@ -381,7 +375,7 @@ async def incident_summary(
 @app.get("/incidents/{alert_id}", tags=["dashboard"])
 async def get_incident(
     alert_id: str = Path(..., description="Alert ID to look up"),
-    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """Return a single incident by alert ID."""
     if not _verify_api_key(key):
@@ -400,7 +394,7 @@ async def get_incident(
 @app.post("/incidents/{alert_id}/close", tags=["dashboard"])
 async def force_close_incident(
     alert_id: str = Path(..., description="Alert ID to force-close"),
-    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """
     Force-close an incident from the dashboard.
@@ -426,7 +420,7 @@ async def force_close_incident(
 
 @app.post("/incidents/sync", tags=["dashboard"])
 async def force_incident_sync(
-    key: Optional[str] = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
+    key: str | None = Query(default=None, description="API key (required if WEBHOOK_API_KEY is set)"),
 ):
     """Force an immediate sync of open alerts from JSM."""
     if not _verify_api_key(key):
@@ -452,7 +446,7 @@ async def acknowledge_alert(
         ...,
         description="JSM alert ID (alphanumeric, hyphens, underscores; max 200 chars)",
     ),
-    key: Optional[str] = Query(
+    key: str | None = Query(
         default=None,
         description="API key for authentication (must match WEBHOOK_API_KEY).",
     ),
@@ -494,14 +488,14 @@ async def acknowledge_alert(
 @app.post("/alert", tags=["webhook"])
 async def receive_alert(
     request: Request,
-    mode: Optional[str] = Query(
+    mode: str | None = Query(
         default=None,
         description=(
             "Set to 'always' to skip the on-call check and always notify. "
             "Use this for schedules like Internal Systems_schedule."
         ),
     ),
-    key: Optional[str] = Query(
+    key: str | None = Query(
         default=None,
         description="API key for webhook authentication (must match WEBHOOK_API_KEY).",
     ),
