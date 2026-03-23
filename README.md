@@ -32,8 +32,8 @@ JSM alert created / escalated
 
 | JSM Webhook URL | Behaviour |
 |---|---|
-| `https://your-host:8080/alert` | Notify only when on-call |
-| `https://your-host:8080/alert?mode=always` | Always notify regardless of schedule |
+| `https://your-host:8080/alert?key=YOUR_KEY` | Notify only when on-call |
+| `https://your-host:8080/alert?mode=always&key=YOUR_KEY` | Always notify regardless of schedule |
 
 ---
 
@@ -45,8 +45,26 @@ JSM alert created / escalated
 - **Rich TTS** — spoken announcements include priority, alert title, system name, and a description excerpt
 - **Real media player title** — uses `extra.metadata` so HA shows the actual alert title instead of "Playing Default Media Receiver"
 - **Persistent HA notifications** — created on alert, auto-dismissed on Acknowledge or Close
+- **Configurable announcement formats** — customise the detailed and terse TTS templates with placeholders
+- **Time-based quiet hours** — silent windows (no TTS) and terse windows (short format), with cross-midnight support
+- **Priority override for silent mode** — P1/P2 alerts can bypass silent windows so critical incidents always wake you
+- **Per-media-player routing** — route TTS to different speakers by time of day (e.g. bedroom at night, office during the day)
+- **Volume control** — set media player volume before TTS playback, with separate levels for full and terse modes
+- **Alert batching** — combine multiple alerts arriving within a configurable window into one TTS announcement
+- **TTS repeat (pager mode)** — repeat TTS at intervals for critical alerts until acknowledged or max repeats hit
+- **Acknowledge from HA** — `POST /alert/{id}/acknowledge` endpoint lets HA automations ack alerts without opening JSM
 - **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
+- **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
+- **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
+- **HA automation webhooks** — fire HA webhook triggers on Create, Escalate, Acknowledge, Close, Update, and SLA Breach events to control lights, scenes, scripts
+- **Incident state dashboard** — optional SQLite-backed `GET /incidents` API with status/priority filters, summary endpoint, and Grafana JSON datasource compatibility
+- **JSM incident sync** — optional background task to poll JSM for open alerts and keep the incident dashboard current
+- **Emoji toggle** — `ENABLE_EMOJIS=false` strips all emojis from notifications, metadata, and incoming alert text
+- **Generic webhook support** — any system that sends HTTP POST (Grafana, Uptime Kuma, shell scripts, HA automations) can trigger HA alerts
+- **API key authentication** — optional `?key=` query parameter for webhook URL authorization
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
+- **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
+- **Safe format templates** — user-configurable announcement formats use a restricted formatter that blocks attribute/index access
 - **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`
 
 ---
@@ -195,7 +213,7 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 | Field | Value |
 |---|---|
 | **Name** | `HA Notifier — On-Call` |
-| **Webhook URL** | `https://your-host/alert` |
+| **Webhook URL** | `https://your-host/alert?key=YOUR_API_KEY` |
 | **Method** | POST |
 | **Send alert payload** | ✅ Enabled |
 | **Alert actions** | Create, EscalateNext, Acknowledge, Close |
@@ -206,19 +224,34 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 | Field | Value |
 |---|---|
 | **Name** | `HA Notifier — Always Notify` |
-| **Webhook URL** | `https://your-host/alert?mode=always` |
+| **Webhook URL** | `https://your-host/alert?mode=always&key=YOUR_API_KEY` |
 | **Method** | POST |
 | **Send alert payload** | ✅ Enabled |
 | **Alert actions** | Create, EscalateNext, Acknowledge, Close |
 | **Teams / Schedules filter** | Your always-notify team/schedule |
 
-### Optional — Webhook Signature (recommended)
+### Optional — API Key Authentication (recommended)
 
-If you set `WEBHOOK_SECRET` in `.env`, add a custom header to each JSM webhook:
+The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and include the key in your JSM webhook URLs:
+
+```
+https://your-host/alert?key=YOUR_API_KEY
+https://your-host/alert?mode=always&key=YOUR_API_KEY
+```
+
+Generate a key: `openssl rand -hex 32`
+
+Requests without a valid `?key=` parameter receive a 401 Unauthorized.
+
+### Optional — HMAC Webhook Signature
+
+For additional security (or as an alternative to API keys), set `WEBHOOK_SECRET` in `.env` and add a custom header to each JSM webhook:
 
 | Header name | Value |
 |---|---|
 | `X-Hub-Signature-256` | `sha256={{ hmac_sha256(body, "YOUR_SECRET") }}` |
+
+You can use **both** `WEBHOOK_API_KEY` and `WEBHOOK_SECRET` together for defense in depth.
 
 > Check the Atlassian JSM documentation for the exact Jinja/template syntax supported in your version's outgoing webhook headers.
 
@@ -308,6 +341,587 @@ curl -X POST http://localhost:8080/alert \
 
 ---
 
+## Using With Other Webhook Sources
+
+The `/alert` endpoint accepts any JSON payload matching the OpsGenie webhook format.  You don't need JSM — any monitoring system, script, or automation that can send HTTP POST requests can trigger HA alerts.
+
+### Required Payload Format
+
+```json
+{
+  "action": "Create",
+  "alert": {
+    "alertId": "unique-id-123",
+    "message": "Your alert title here",
+    "priority": "P1",
+    "entity": "optional-system-name",
+    "description": "Optional longer description text"
+  }
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `action` | Yes | `Create`, `EscalateNext`, `Acknowledge`, or `Close` |
+| `alert.alertId` | Yes | Unique identifier (used for dedup and notification tracking) |
+| `alert.message` | Yes | Alert title / summary (spoken by TTS) |
+| `alert.priority` | No | `P1`–`P5` (default: `P3`) |
+| `alert.entity` | No | System / host name |
+| `alert.description` | No | Longer details (first 200 chars used in TTS) |
+
+### Example: Uptime Kuma
+
+Configure a webhook notification in Uptime Kuma with the Notification Type set to "Webhook" / custom JSON:
+
+```bash
+# Uptime Kuma → Settings → Notifications → Add → Webhook
+# URL: http://your-notifier:8080/alert?mode=always&key=YOUR_KEY
+# Method: POST
+# Body:
+{
+  "action": "Create",
+  "alert": {
+    "alertId": "uptime-kuma-{{ monitorJSON.id }}",
+    "message": "{{ monitorJSON.name }} is {{ heartbeatJSON.status == 1 ? 'UP' : 'DOWN' }}",
+    "priority": "P2",
+    "entity": "{{ monitorJSON.hostname }}"
+  }
+}
+```
+
+### Example: Grafana Alerting
+
+Use a Grafana "webhook" contact point with the OpsGenie payload format:
+
+```bash
+# Grafana → Alerting → Contact Points → New → Webhook
+# URL: http://your-notifier:8080/alert?mode=always&key=YOUR_KEY
+# Method: POST
+#
+# Or use curl to forward Grafana alerts via a script:
+curl -X POST "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "Create",
+    "alert": {
+      "alertId": "grafana-cpu-alert-prod01",
+      "message": "CPU usage above 95% on prod-01",
+      "priority": "P1",
+      "entity": "prod-01",
+      "description": "CPU has been above 95% for the last 5 minutes. Current: 98.2%."
+    }
+  }'
+```
+
+### Example: Prometheus Alertmanager
+
+Use Alertmanager's webhook receiver to POST to the notifier:
+
+```yaml
+# alertmanager.yml
+receivers:
+  - name: ha-notifier
+    webhook_configs:
+      - url: "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+        send_resolved: true
+```
+
+Then use a small relay script or Alertmanager template to transform alerts into the expected format.
+
+### Example: Home Assistant Automation
+
+Trigger an alert from HA itself (e.g. a sensor threshold):
+
+```yaml
+# HA automation action
+service: rest_command.trigger_notifier_alert
+data:
+  alert_id: "ha-temp-alert-{{ now().isoformat() }}"
+  message: "Temperature sensor above threshold"
+  priority: "P2"
+  entity: "sensor.living_room_temperature"
+  description: "Current temperature: {{ states('sensor.living_room_temperature') }}°C"
+```
+
+```yaml
+# configuration.yaml
+rest_command:
+  trigger_notifier_alert:
+    url: "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"action":"Create","alert":{"alertId":"{{ alert_id }}","message":"{{ message }}","priority":"{{ priority }}","entity":"{{ entity }}","description":"{{ description }}"}}
+```
+
+### Example: Simple Shell Script
+
+Trigger an alert from any script or cron job:
+
+```bash
+#!/bin/bash
+# notify-ha.sh — send an alert to the JSM-HA Notifier
+NOTIFIER_URL="http://your-notifier:8080/alert?mode=always&key=YOUR_KEY"
+
+curl -s -X POST "$NOTIFIER_URL" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"action\": \"Create\",
+    \"alert\": {
+      \"alertId\": \"script-$(date +%s)\",
+      \"message\": \"$1\",
+      \"priority\": \"${2:-P3}\",
+      \"entity\": \"$(hostname)\"
+    }
+  }"
+```
+
+Usage: `./notify-ha.sh "Backup failed on NAS" P2`
+
+### Closing / Acknowledging Alerts
+
+To dismiss the persistent HA notification and stop TTS repeats, send a `Close` or `Acknowledge` action with the same `alertId`:
+
+```bash
+curl -X POST "http://your-notifier:8080/alert?mode=always&key=YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "Close", "alert": {"alertId": "the-original-alert-id", "message": "resolved"}}'
+```
+
+Or use the dedicated acknowledge endpoint:
+
+```bash
+curl -X POST "http://your-notifier:8080/alert/the-original-alert-id/acknowledge?key=YOUR_KEY"
+```
+
+---
+
+## JSM Webhook Events Reference
+
+JSM sends different `action` values for each alert lifecycle event.  The notifier handles all of them:
+
+| JSM Action | Notifier Behaviour | HA Webhook Config |
+|---|---|---|
+| `Create` | TTS + persistent notification (if on-call/always-notify) | `HA_WEBHOOK_ON_CREATE` |
+| `EscalateNext` | TTS + persistent notification (always if targeted at you) | `HA_WEBHOOK_ON_ESCALATE` |
+| `Acknowledge` | Dismiss HA notification, cancel TTS repeat | `HA_WEBHOOK_ON_ACKNOWLEDGE` |
+| `Close` | Dismiss HA notification, cancel TTS repeat | `HA_WEBHOOK_ON_CLOSE` |
+| `AddNote` | Fire HA webhook only (no TTS) | `HA_WEBHOOK_ON_UPDATE` |
+| `UnAcknowledge` | Fire HA webhook only | `HA_WEBHOOK_ON_UPDATE` |
+| `AssignOwnership` | Fire HA webhook only | `HA_WEBHOOK_ON_UPDATE` |
+| `SlaBreached` | Fire HA webhook only | `HA_WEBHOOK_ON_SLA_BREACH` |
+
+### JSM Webhook Configuration for All Events
+
+In JSM, configure your outgoing webhook to include **all** action types you want to handle:
+
+| Field | Value |
+|---|---|
+| **Alert actions** | Create, EscalateNext, Acknowledge, Close, AddNote, UnAcknowledge, AssignOwnership |
+| **Webhook URL** | `https://your-host/alert?mode=always&key=YOUR_API_KEY` |
+
+### Generic Webhook Payloads for Each Event Type
+
+These work with JSM, Uptime Kuma, Grafana, scripts, or any HTTP client:
+
+**New alert:**
+```json
+{"action": "Create", "alert": {"alertId": "inc-001", "message": "Server down", "priority": "P1", "entity": "prod-01"}}
+```
+
+**Escalation:**
+```json
+{"action": "EscalateNext", "alert": {"alertId": "inc-001", "message": "Server down", "priority": "P1", "entity": "prod-01"}}
+```
+
+**Acknowledged:**
+```json
+{"action": "Acknowledge", "alert": {"alertId": "inc-001", "message": "Server down"}}
+```
+
+**Resolved / Closed:**
+```json
+{"action": "Close", "alert": {"alertId": "inc-001", "message": "Server down"}}
+```
+
+**Updated (note added):**
+```json
+{"action": "AddNote", "alert": {"alertId": "inc-001", "message": "Server down", "description": "Restarting services..."}}
+```
+
+**SLA Breached:**
+```json
+{"action": "SlaBreached", "alert": {"alertId": "inc-001", "message": "Server down", "priority": "P1"}}
+```
+
+### Complete Lifecycle Script
+
+Send a full alert lifecycle from the command line for testing:
+
+```bash
+URL="http://localhost:8080/alert?mode=always&key=YOUR_KEY"
+ID="test-lifecycle-$(date +%s)"
+
+# Create
+curl -s -X POST "$URL" -H "Content-Type: application/json" \
+  -d "{\"action\":\"Create\",\"alert\":{\"alertId\":\"$ID\",\"message\":\"Test lifecycle alert\",\"priority\":\"P2\",\"entity\":\"test-server\"}}"
+
+sleep 5
+
+# Acknowledge
+curl -s -X POST "$URL" -H "Content-Type: application/json" \
+  -d "{\"action\":\"Acknowledge\",\"alert\":{\"alertId\":\"$ID\",\"message\":\"Test lifecycle alert\"}}"
+
+sleep 5
+
+# Close
+curl -s -X POST "$URL" -H "Content-Type: application/json" \
+  -d "{\"action\":\"Close\",\"alert\":{\"alertId\":\"$ID\",\"message\":\"Test lifecycle alert\"}}"
+```
+
+---
+
+## HA Automation Webhooks
+
+The notifier can fire Home Assistant webhook triggers on each alert event, enabling you to control lights, scenes, scripts, or any HA automation in response to incidents.
+
+### How It Works
+
+1. You define an HA automation with a `webhook` trigger
+2. You set the webhook ID in the notifier's `.env` file
+3. When the matching event occurs, the notifier POSTs the alert data to HA
+4. Your automation receives the data as `trigger.json.*` variables
+
+### Step-by-Step Setup
+
+#### 1. Create an HA automation
+
+```yaml
+# automations.yaml
+- alias: "Flash office light red on P1 alert"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_alert_created"
+      allowed_methods: [POST]
+      local_only: true
+  condition:
+    - condition: template
+      value_template: "{{ trigger.json.priority == 'P1' }}"
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.office_desk
+      data:
+        color_name: red
+        brightness: 255
+        flash: long
+    - delay: "00:00:10"
+    - service: light.turn_on
+      target:
+        entity_id: light.office_desk
+      data:
+        color_name: white
+```
+
+#### 2. Set the webhook ID in `.env`
+
+```env
+HA_WEBHOOK_ON_CREATE=jsm_alert_created
+```
+
+#### 3. Available trigger variables
+
+In your HA automation templates, access the alert data via:
+
+| Variable | Description |
+|---|---|
+| `trigger.json.event` | Action name (`Create`, `EscalateNext`, etc.) |
+| `trigger.json.alert_id` | Unique alert identifier |
+| `trigger.json.message` | Alert title / summary |
+| `trigger.json.priority` | `P1`–`P5` |
+| `trigger.json.entity` | System / host name |
+| `trigger.json.description` | First 200 chars of description |
+| `trigger.json.source` | Alert source |
+| `trigger.json.tags` | List of tags |
+
+### Example HA Automations
+
+#### Flash all lights on escalation
+
+```yaml
+- alias: "Flash all lights on escalation"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_escalation"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: all
+      data:
+        flash: long
+        color_name: red
+```
+
+```env
+HA_WEBHOOK_ON_ESCALATE=jsm_escalation
+```
+
+#### Turn status light green on resolution
+
+```yaml
+- alias: "Status light green on resolve"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_alert_resolved"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.status_indicator
+      data:
+        color_name: green
+        brightness: 200
+    - delay: "00:01:00"
+    - service: light.turn_off
+      target:
+        entity_id: light.status_indicator
+```
+
+```env
+HA_WEBHOOK_ON_CLOSE=jsm_alert_resolved
+```
+
+#### Flash yellow on SLA breach
+
+```yaml
+- alias: "SLA breach warning"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_sla_breached"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.office_desk
+      data:
+        color_name: yellow
+        flash: short
+```
+
+```env
+HA_WEBHOOK_ON_SLA_BREACH=jsm_sla_breached
+```
+
+#### Priority-based color coding
+
+```yaml
+- alias: "Color code by priority"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_alert_created"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.status_indicator
+      data:
+        brightness: 255
+        rgb_color: >
+          {% if trigger.json.priority == 'P1' %}
+            [255, 0, 0]
+          {% elif trigger.json.priority == 'P2' %}
+            [255, 165, 0]
+          {% elif trigger.json.priority == 'P3' %}
+            [255, 255, 0]
+          {% else %}
+            [0, 255, 0]
+          {% endif %}
+```
+
+#### Multiple webhooks per event
+
+You can fire multiple webhooks for a single event:
+
+```env
+HA_WEBHOOK_ON_CREATE=jsm_alert_created,flash_office_lights,send_mobile_notification
+HA_WEBHOOK_ON_ESCALATE=jsm_escalation,flash_all_lights,play_siren
+```
+
+---
+
+## Incident State Dashboard
+
+An optional SQLite-backed incident tracker that exposes a JSON API at `/incidents`.  Useful for building Grafana dashboards, monitoring tools, or just quickly checking what's open.
+
+### Enabling the Dashboard
+
+```env
+INCIDENT_DASHBOARD_ENABLED=true
+INCIDENT_DB_PATH=/data/incidents.db
+INCIDENT_SYNC_INTERVAL_MINUTES=5
+```
+
+For persistent storage, mount a volume in `docker-compose.yml`:
+
+```yaml
+services:
+  jsm-ha-notifier:
+    volumes:
+      - ./data:/data
+```
+
+### API Endpoints
+
+#### `GET /incidents`
+
+List all incidents with optional filters:
+
+```bash
+# All incidents
+curl http://localhost:8080/incidents
+
+# Only open incidents
+curl "http://localhost:8080/incidents?status=open"
+
+# Only P1 incidents
+curl "http://localhost:8080/incidents?priority=P1"
+
+# Open P1 incidents
+curl "http://localhost:8080/incidents?status=open&priority=P1"
+```
+
+Response:
+```json
+{
+  "incidents": [
+    {
+      "alert_id": "abc-123",
+      "message": "Database connection pool exhausted",
+      "priority": "P1",
+      "entity": "prod-db-01",
+      "description": "All 200 connections in use...",
+      "source": "Datadog",
+      "status": "open",
+      "action": "Create",
+      "created_at": "2026-03-22T10:30:00+00:00",
+      "updated_at": "2026-03-22T10:30:00+00:00",
+      "acknowledged_at": null,
+      "closed_at": null
+    }
+  ],
+  "count": 1
+}
+```
+
+#### `GET /incidents/summary`
+
+Aggregate counts:
+
+```bash
+curl http://localhost:8080/incidents/summary
+```
+
+```json
+{
+  "total_open": 3,
+  "total_closed": 12,
+  "by_status": {"open": 2, "escalated": 1, "closed": 12},
+  "by_priority": {"P1": 1, "P2": 2}
+}
+```
+
+#### `GET /incidents/{alert_id}`
+
+Single incident detail:
+
+```bash
+curl http://localhost:8080/incidents/abc-123
+```
+
+#### `POST /incidents/sync`
+
+Force an immediate sync from JSM:
+
+```bash
+curl -X POST http://localhost:8080/incidents/sync
+```
+
+### Grafana Integration
+
+The `/incidents` endpoint is compatible with Grafana's **JSON** or **Infinity** datasource plugins:
+
+1. Install the [Infinity datasource plugin](https://grafana.com/grafana/plugins/yesoreyeram-infinity-datasource/) in Grafana
+2. Add a new datasource:
+   - Type: **Infinity**
+   - URL: `http://your-notifier:8080`
+3. Create a dashboard panel:
+   - Source: Infinity
+   - Type: JSON
+   - URL: `/incidents?status=open`
+   - Root selector: `$.incidents`
+4. Add columns: `alert_id`, `message`, `priority`, `status`, `entity`, `created_at`
+
+For the summary endpoint, use `/incidents/summary` to build gauge or stat panels showing open incident counts by priority.
+
+#### Pre-built Dashboard
+
+A ready-to-import Grafana dashboard is included in this repo:
+
+```
+grafana/incident-dashboard.json
+```
+
+To import:
+1. In Grafana, go to **Dashboards** > **Import**
+2. Upload `grafana/incident-dashboard.json`
+3. Select your Infinity datasource
+4. Set the `api_key` variable to your `WEBHOOK_API_KEY` value (under dashboard Settings > Variables)
+
+The dashboard includes:
+- Stat panels: Total Open, Total Closed, Open P1, Open P2, Open P3
+- Full incident table with priority/status color coding and column filters
+- Pie charts: By Status, By Priority (open only)
+- Auto-refresh every 30 seconds
+
+### Force-Close Incidents
+
+Close a stale incident directly from the API (without waiting for JSM):
+
+```bash
+curl -X POST "http://localhost:8080/incidents/the-alert-id/close?key=YOUR_KEY"
+```
+
+This sets the status to `closed`, dismisses the HA persistent notification, and cancels any TTS repeats.
+
+### Retention Policy
+
+Automatically clean up old incidents to prevent unbounded database growth:
+
+```env
+INCIDENT_RETENTION_OPEN_DAYS=30       # Delete stale open incidents after 30 days
+INCIDENT_RETENTION_CLOSED_DAYS=90     # Delete resolved incidents after 90 days
+```
+
+Retention runs during each sync cycle (`INCIDENT_SYNC_INTERVAL_MINUTES`).  Set to `0` to keep everything forever (default).
+
+### Alert Enrichment
+
+When the incident dashboard is enabled, the notifier automatically enriches new alerts by fetching full details from the JSM API on `Create` events.  This adds:
+
+- **Tags** — alert tags from JSM
+- **Teams** — team assignments
+- **Responders** — who the alert was sent to
+- **Custom details** — any key/value pairs from the alert's `details` field
+
+All enrichment data is stored in the SQLite database and returned in the `/incidents` API response.
+
+---
+
 ## Running on unRAID (or any Docker host)
 
 ### Option A — Docker Compose (recommended)
@@ -339,9 +953,9 @@ docker run -d \
 
 ---
 
-## CI/CD — GitHub Actions & GHCR
+## CI/CD — GitHub Actions & Container Registries
 
-The repository includes two workflows.
+The repository includes two workflows.  Images are published to both **GitHub Container Registry (GHCR)** and **Docker Hub**.
 
 ### CI (`.github/workflows/ci.yml`)
 
@@ -349,11 +963,14 @@ Triggers on every push to `main` or `develop` and on pull requests.  Runs:
 - `ruff` (lint)
 - `black` (format check)
 - `mypy` (type check, advisory)
-- `pytest` with coverage
+- `pip-audit` (dependency CVE scan)
+- `bandit` (Python SAST, advisory)
+- `pytest` with coverage (fails below 70%)
+- Tests against Python 3.11, 3.12, 3.13
 
 ### Release (`.github/workflows/release.yml`)
 
-Triggers on push to `main` or any version tag (`v*`).  Builds a multi-arch Docker image (linux/amd64 + linux/arm64) and pushes it to GitHub Container Registry (GHCR).
+Triggers on push to `main` or any version tag (`v*`).  Builds a multi-arch Docker image (linux/amd64 + linux/arm64) and pushes to both **GHCR** and **Docker Hub**.  Also runs **Trivy** container vulnerability scanning and uploads results to GitHub Security.
 
 **No personal access tokens or manual secrets are needed** — the workflow uses the built-in `GITHUB_TOKEN` that GitHub provides automatically to every Actions run, which already has `packages: write` permission as configured in the workflow.
 
@@ -380,7 +997,43 @@ Alternatively, link the package to your repository:
 
 Once public, `docker pull ghcr.io/realdougeubanks/jsm-ha-notifier:latest` works without login from any machine.
 
-#### Updating `docker-compose.yml` to use the GHCR image
+#### Docker Hub setup
+
+The release workflow also pushes to Docker Hub if credentials are configured.  To enable:
+
+1. Create a Docker Hub access token at <https://hub.docker.com/settings/security>
+2. In your GitHub repo, go to **Settings** > **Secrets and variables** > **Actions**
+3. Add these secrets/variables:
+   - **Variable** `DOCKERHUB_USERNAME` = your Docker Hub username (e.g. `realdougeubanks`)
+   - **Secret** `DOCKERHUB_TOKEN` = the access token from step 1
+
+Once configured, every release pushes to both registries:
+```
+docker pull ghcr.io/realdougeubanks/jsm-ha-notifier:latest
+docker pull realdougeubanks/jsm-ha-notifier:latest
+```
+
+If Docker Hub credentials are not set, the workflow gracefully skips the Docker Hub login and only pushes to GHCR.
+
+#### Image signing and provenance
+
+Every image pushed by the release workflow is:
+
+1. **Signed with cosign** (Sigstore keyless / OIDC) — proves the image was built by this GitHub Actions workflow
+2. **Attested with SLSA Build Level 2** — GitHub's native build provenance attestation
+
+To verify an image before pulling:
+
+```bash
+# Install cosign: https://docs.sigstore.dev/cosign/system_config/installation/
+cosign verify ghcr.io/realdougeubanks/jsm-ha-notifier:latest \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp github.com/RealDougEubanks/JSM-HomeAssistant-Notifier
+```
+
+This confirms the image was built from this repository's GitHub Actions — not tampered with after the fact.
+
+#### Updating `docker-compose.yml` to use a published image
 
 After the image has been published, edit `docker-compose.yml`:
 
@@ -406,9 +1059,19 @@ Receives JSM webhook payloads.
 
 Expected payload: standard OpsGenie / JSM Ops outgoing webhook JSON.
 
+### `POST /alert/{alert_id}/acknowledge`
+
+Acknowledges a JSM alert, dismisses the HA notification, and cancels TTS repeats.  Intended for use from HA automations (see `.env.example` for a ready-to-use `rest_command` snippet).
+
+Returns `{"alert_id": "...", "acknowledged": true}` on success, 502 if JSM rejects the request.
+
 ### `GET /health`
 
 Returns `{"status": "ok"}`.  Used by Docker health-check and external monitors.
+
+### `GET /healthz`
+
+Deep health check — verifies JSM API credentials and HA API connectivity.  Returns 200 with `{"healthy": true, ...}` if both pass, or 503 if either fails.  Use this for readiness probes or monitoring dashboards.
 
 ### `GET /status`
 
@@ -430,6 +1093,22 @@ Returns current on-call status for all watched schedules (forces a fresh JSM API
 ### `POST /cache/invalidate`
 
 Clears the cached on-call status so the next alert forces a fresh JSM API check.  Useful immediately after a rotation hand-off.
+
+### `GET /incidents` (dashboard)
+
+List incidents with optional `?status=` and `?priority=` filters.  Requires `INCIDENT_DASHBOARD_ENABLED=true`.
+
+### `GET /incidents/summary` (dashboard)
+
+Aggregate incident counts by status and priority.
+
+### `GET /incidents/{alert_id}` (dashboard)
+
+Single incident detail by alert ID.
+
+### `POST /incidents/sync` (dashboard)
+
+Force an immediate sync of open alerts from JSM into the incident store.
 
 ---
 
@@ -550,7 +1229,7 @@ The persistent HA notification will be dismissed automatically on the next succe
 
 - [ ] Atlassian API token created with minimum necessary permissions (JSM Ops schedule access)
 - [ ] `.env` is in `.gitignore` and was never committed
-- [ ] `WEBHOOK_SECRET` is set (`openssl rand -hex 32`)
+- [ ] `WEBHOOK_API_KEY` is set (`openssl rand -hex 32`) — or — `WEBHOOK_SECRET` is set (or both)
 - [ ] Service runs as non-root user (handled in Dockerfile)
 - [ ] Container filesystem is read-only (`read_only: true` in compose)
 - [ ] Port 8080 is behind a TLS-terminating reverse proxy or Cloudflare Tunnel before reaching the internet
@@ -573,15 +1252,24 @@ jsm-ha-notifier/
 │   ├── models.py           # JSM webhook payload models
 │   ├── jsm_client.py       # Async JSM Ops API client with caching
 │   ├── ha_client.py        # Async Home Assistant REST API client
-│   └── alert_processor.py  # Core routing / dedup / notification logic
+│   ├── alert_processor.py  # Core routing / dedup / notification logic
+│   ├── incident_store.py   # SQLite-backed incident state tracker
+│   └── time_windows.py     # Time-window parsing and media player routing
 ├── tests/
-│   ├── conftest.py         # Shared fixtures
+│   ├── conftest.py                  # Shared fixtures
 │   ├── test_models.py
 │   ├── test_config.py
 │   ├── test_ha_client.py
-│   └── test_alert_processor.py
+│   ├── test_alert_processor.py
+│   ├── test_announcement_format.py  # Format, time windows, priority override, repeat
+│   ├── test_robustness.py           # Security: sanitization, safe formatter, emoji toggle
+│   ├── test_incident_store.py       # Incident store, webhooks, force-close, retention
+│   └── test_time_windows.py         # Window parsing, player routing
+├── grafana/
+│   └── incident-dashboard.json      # Pre-built Grafana dashboard (import-ready)
 ├── .env.example            # Template — copy to .env and fill in values
 ├── .gitignore
+├── CHANGELOG.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml          # black, ruff, pytest, mypy config

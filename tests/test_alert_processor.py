@@ -3,9 +3,10 @@ Tests for AlertProcessor — the core routing / notification decision logic.
 
 All external I/O (JSM API + HA API) is mocked so tests run offline and fast.
 """
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,8 +16,8 @@ from src.ha_client import HAClient
 from src.jsm_client import JSMClient
 from tests.conftest import make_alert
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_processor(
     settings: Settings,
@@ -30,14 +31,18 @@ def _make_processor(
     jsm.invalidate_oncall_cache = MagicMock()
 
     ha = MagicMock(spec=HAClient)
+    ha.media_player = settings.ha_media_player_entity
     ha.play_tts_alert = AsyncMock(return_value=True)
+    ha.play_tts_batch = AsyncMock(return_value=True)
     ha.send_persistent_notification = AsyncMock(return_value=True)
     ha.dismiss_notification = AsyncMock(return_value=True)
+    ha._set_volume = AsyncMock(return_value=True)
 
     return AlertProcessor(settings, jsm, ha)
 
 
 # ── always_notify mode ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_always_notify_creates_notification(settings: Settings):
@@ -50,6 +55,7 @@ async def test_always_notify_creates_notification(settings: Settings):
 
 
 # ── On-call check ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_on_call_notifies(settings: Settings):
@@ -70,6 +76,7 @@ async def test_not_on_call_no_notification(settings: Settings):
 
 
 # ── Escalation path ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_escalation_to_me_notifies(settings: Settings):
@@ -109,6 +116,7 @@ async def test_escalation_via_responders_list(settings: Settings):
 
 # ── Ignored actions ───────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["Acknowledge", "AddNote", "AssignOwnership", "Seen"])
 async def test_ignored_actions_do_not_notify(action: str, settings: Settings):
@@ -136,6 +144,7 @@ async def test_close_dismisses_notification(settings: Settings):
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_duplicate_alert_suppressed(settings: Settings):
@@ -166,6 +175,7 @@ async def test_same_alert_different_action_not_duplicate(settings: Settings):
 
 
 # ── Schedule not found ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_schedule_not_found_skipped(settings: Settings):

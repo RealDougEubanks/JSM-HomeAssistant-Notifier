@@ -1,12 +1,10 @@
 """Tests for the JSM webhook payload models."""
+
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from src.models import AlertDetails, AlertRecipient, JSMWebhookPayload
-
+from src.models import JSMWebhookPayload
 
 SAMPLE_CREATE = {
     "action": "Create",

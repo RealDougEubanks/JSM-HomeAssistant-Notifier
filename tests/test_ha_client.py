@@ -1,16 +1,17 @@
 """Tests for the Home Assistant client: TTS text, metadata, and API calls."""
+
 from __future__ import annotations
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from src.ha_client import HAClient
 from src.models import AlertDetails
 from tests.conftest import make_alert
 
-
 # ── TTS text building ─────────────────────────────────────────────────────────
+
 
 def test_tts_text_p1_create(ha_client: HAClient):
     alert = make_alert(priority="P1", entity="web-01", description="Service down").alert
@@ -39,13 +40,14 @@ def test_tts_long_description_truncated(ha_client: HAClient):
 
 # ── Media metadata ────────────────────────────────────────────────────────────
 
+
 def test_media_metadata_p1(ha_client: HAClient):
     alert = make_alert(priority="P1", message="DB Down").alert
     meta = ha_client._build_media_metadata(alert, "Create")
     assert "🔴" in meta["title"]
     assert "P1" in meta["title"]
     assert "DB Down" in meta["title"]
-    assert meta["artist"] == "JSM — Atlantic BT"
+    assert meta["artist"] == "JSM Alert Notifier"
 
 
 def test_media_metadata_escalation_prefix(ha_client: HAClient):
@@ -62,6 +64,7 @@ def test_media_metadata_long_title_truncated(ha_client: HAClient):
 
 # ── TTS content ID ────────────────────────────────────────────────────────────
 
+
 def test_tts_content_id_format(ha_client: HAClient):
     content_id = ha_client._build_tts_content_id("Hello World")
     assert content_id.startswith("media-source://tts/")
@@ -72,12 +75,13 @@ def test_tts_content_id_format(ha_client: HAClient):
 
 # ── HA service calls (mocked with respx) ──────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_play_tts_alert_success(ha_client: HAClient):
-    route = respx.post("https://ha.example.com/api/services/media_player/play_media").mock(
-        return_value=httpx.Response(200, json=[])
-    )
+    route = respx.post(
+        "https://ha.example.com/api/services/media_player/play_media"
+    ).mock(return_value=httpx.Response(200, json=[]))
     payload = make_alert(priority="P1")
     result = await ha_client.play_tts_alert(payload.alert, "Create")
     assert result is True
@@ -106,6 +110,7 @@ async def test_persistent_notification(ha_client: HAClient):
     assert result is True
     body = route.calls[0].request.content
     import json
+
     data = json.loads(body)
     assert data["notification_id"] == "jsm_alert_n-001"
 
@@ -119,5 +124,6 @@ async def test_dismiss_notification(ha_client: HAClient):
     result = await ha_client.dismiss_notification("n-001")
     assert result is True
     import json
+
     data = json.loads(route.calls[0].request.content)
     assert data["notification_id"] == "jsm_alert_n-001"

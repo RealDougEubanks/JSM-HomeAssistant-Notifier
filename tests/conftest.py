@@ -1,6 +1,7 @@
 """
 Shared pytest fixtures.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -10,8 +11,8 @@ from src.ha_client import HAClient
 from src.jsm_client import JSMClient
 from src.models import AlertDetails, AlertRecipient, JSMWebhookPayload
 
-
 # ── Common alert payloads ─────────────────────────────────────────────────────
+
 
 def make_alert(
     alert_id: str = "alert-001",
@@ -45,6 +46,7 @@ def make_alert(
 
 # ── Settings fixture ──────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
@@ -62,6 +64,7 @@ def settings() -> Settings:
 
 
 # ── Client fixtures ───────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def jsm_client(settings: Settings) -> JSMClient:
@@ -83,4 +86,12 @@ def ha_client(settings: Settings) -> HAClient:
         tts_service=settings.ha_tts_service,
         tts_language=settings.ha_tts_language,
         tts_voice=settings.ha_tts_voice,
+        announcement_format=settings.announcement_format,
+        terse_announcement_format=settings.terse_announcement_format,
+        volume_default=(
+            float(settings.ha_volume_default) if settings.ha_volume_default else None
+        ),
+        volume_terse=(
+            float(settings.ha_volume_terse) if settings.ha_volume_terse else None
+        ),
     )

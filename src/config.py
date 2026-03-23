@@ -18,9 +18,9 @@ to subclass both `EnvSettingsSource` and `DotEnvSettingsSource`, intercept
 from __future__ import annotations
 
 import json
-from typing import Any, List, Tuple, Type
+from typing import Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -29,6 +29,8 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+from .time_windows import Window, parse_windows
 
 # Fields that accept plain comma-separated strings in addition to JSON arrays.
 _CSV_FIELDS = frozenset({"always_notify_schedule_names", "check_oncall_schedule_names"})
@@ -57,9 +59,7 @@ def _parse_csv_or_json(field_name: str, value: Any) -> Any:
 class _CsvAwareEnvSource(EnvSettingsSource):
     """Reads process environment variables; handles CSV list fields."""
 
-    def decode_complex_value(
-        self, field_name: str, field: FieldInfo, value: Any
-    ) -> Any:
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
         result = _parse_csv_or_json(field_name, value)
         # If _parse_csv_or_json returned a list we're done; otherwise delegate.
         if isinstance(result, list) and field_name in _CSV_FIELDS:
@@ -70,9 +70,7 @@ class _CsvAwareEnvSource(EnvSettingsSource):
 class _CsvAwareDotEnvSource(DotEnvSettingsSource):
     """Reads .env file; handles CSV list fields."""
 
-    def decode_complex_value(
-        self, field_name: str, field: FieldInfo, value: Any
-    ) -> Any:
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
         result = _parse_csv_or_json(field_name, value)
         if isinstance(result, list) and field_name in _CSV_FIELDS:
             return result
@@ -89,7 +87,9 @@ class Settings(BaseSettings):
 
     # ── Atlassian / JSM ──────────────────────────────────────────────────────
     jsm_api_url: str = "https://api.atlassian.com"
-    jira_base_url: str = ""  # e.g. https://your-org.atlassian.net (reserved; not currently used)
+    jira_base_url: str = (
+        ""  # e.g. https://your-org.atlassian.net (reserved; not currently used)
+    )
     jsm_cloud_id: str
     jsm_username: str
     jsm_api_token: str
@@ -100,10 +100,10 @@ class Settings(BaseSettings):
     # Accepts a plain comma-separated string or a JSON array in .env:
     #   ALWAYS_NOTIFY_SCHEDULE_NAMES=Internal Systems_schedule
     #   ALWAYS_NOTIFY_SCHEDULE_NAMES=["Internal Systems_schedule","Another"]
-    always_notify_schedule_names: List[str] = []
+    always_notify_schedule_names: list[str] = []
 
     # Schedules listed here only notify when you are currently on-call.
-    check_oncall_schedule_names: List[str] = []
+    check_oncall_schedule_names: list[str] = []
 
     # ── Home Assistant ───────────────────────────────────────────────────────
     ha_url: str
@@ -118,6 +118,78 @@ class Settings(BaseSettings):
 
     # ── Webhook security ─────────────────────────────────────────────────────
     webhook_secret: str = ""
+    # Optional API key passed as a ?key= query parameter on webhook URLs.
+    # If set, every inbound request to /alert (and /alert/{id}/acknowledge)
+    # must include ?key=<this value> or receive a 401.
+    webhook_api_key: str = ""
+
+    # ── Emoji control ─────────────────────────────────────────────────────────
+    # When true (default), priority emojis (🔴, 🟠, …) appear in notification
+    # titles and media metadata.  When false, all emojis — both internal ones
+    # and any arriving in alert text — are stripped from output.
+    enable_emojis: bool = True
+
+    # ── Announcement format ─────────────────────────────────────────────────
+    # Template for the full (detailed) TTS announcement.  Available placeholders:
+    #   {action_prefix}  – "Escalated alert!" or "Attention!"
+    #   {priority}       – e.g. "Priority 1, Critical"
+    #   {message}        – alert title / summary
+    #   {entity}         – system / host name (empty string if absent)
+    #   {description}    – truncated description (empty string if absent)
+    announcement_format: str = (
+        "{action_prefix} {priority} alert from Jira Service Management. "
+        "Alert: {message}.{entity_part}{description_part}"
+    )
+
+    # Template for terse (short) announcements during terse windows.
+    terse_announcement_format: str = "{action_prefix} {priority} alert. {message}."
+
+    # ── Time windows (quiet hours) ───────────────────────────────────────
+    # Comma-separated HH:MM-HH:MM windows.  Cross-midnight is supported.
+    # During silent windows, no TTS is played (persistent notification only).
+    # During terse windows, only the terse format is spoken.
+    # Leave empty to disable.
+    silent_window: str = ""
+    terse_window: str = ""
+
+    # Priorities that override silent mode (always play TTS even during
+    # silent windows).  Comma-separated, e.g. "P1" or "P1,P2".
+    silent_window_override_priorities: str = ""
+
+    # Parsed window lists — populated by the model validator below.
+    _silent_windows: list[Window] = []
+    _terse_windows: list[Window] = []
+
+    # ── Media player routing ─────────────────────────────────────────────
+    # Route TTS to different speakers by time of day.
+    # Format: entity@HH:MM-HH:MM pairs, comma-separated.
+    # If the current time matches a routing entry, that player is used.
+    # Falls back to HA_MEDIA_PLAYER_ENTITY if no routing entry matches.
+    # Example: media_player.bedroom@22:00-08:00, media_player.office@08:00-18:00
+    ha_media_player_routing: str = ""
+
+    # ── Volume control ───────────────────────────────────────────────────
+    # Volume levels (0.0–1.0) applied before TTS playback.
+    # Set to empty string to skip volume adjustment entirely (use player's
+    # current volume).
+    ha_volume_default: str = ""
+    # Volume used during terse time windows.
+    ha_volume_terse: str = ""
+
+    # ── Alert batching ───────────────────────────────────────────────────
+    # When multiple alerts fire within this many seconds, combine them into
+    # a single TTS announcement.  Set to 0 to disable batching (default).
+    alert_batch_window_seconds: int = 0
+
+    # ── TTS repeat (pager mode) ──────────────────────────────────────────
+    # For critical alerts, repeat the TTS announcement at intervals until
+    # acknowledged or closed in JSM.
+    # Seconds between repeats (0 = disabled, default).
+    tts_repeat_interval_seconds: int = 0
+    # Maximum number of repeats before giving up.
+    tts_repeat_max: int = 5
+    # Which priorities trigger repeats.  Comma-separated, e.g. "P1" or "P1,P2".
+    tts_repeat_priorities: str = "P1"
 
     # ── Tuning ───────────────────────────────────────────────────────────────
     oncall_cache_ttl_seconds: int = 300
@@ -126,26 +198,63 @@ class Settings(BaseSettings):
     # An HA notification + TTS announcement fires if the check fails.
     token_check_interval_hours: int = 24
 
+    # ── HA automation webhooks ────────────────────────────────────────────
+    # Webhook IDs fired on HA for specific alert lifecycle events.
+    # These trigger HA automations (flash lights, change colors, etc.).
+    # Each value is a webhook ID or comma-separated list of webhook IDs.
+    # Leave empty to disable.
+    ha_webhook_on_create: str = ""
+    ha_webhook_on_escalate: str = ""
+    ha_webhook_on_acknowledge: str = ""
+    ha_webhook_on_close: str = ""
+    ha_webhook_on_update: str = ""
+    ha_webhook_on_sla_breach: str = ""
+
+    # ── Incident dashboard ────────────────────────────────────────────────
+    # Enable the incident state dashboard (GET /incidents).
+    # Tracks open/closed incidents in a SQLite database.
+    incident_dashboard_enabled: bool = False
+    # Path to the SQLite database file.  Use /tmp for ephemeral storage
+    # or mount a volume for persistence across container restarts.
+    incident_db_path: str = "/tmp/incidents.db"
+    # How often (minutes) to sync open incidents from JSM.
+    # Set to 0 to disable background sync (only updates from webhooks).
+    incident_sync_interval_minutes: int = 0
+    # Retention policy: automatically delete incidents older than N days.
+    # Open incidents older than this are assumed stale and cleaned up.
+    # Set to 0 to keep forever.
+    incident_retention_open_days: int = 0
+    # Closed/acknowledged incidents older than this are cleaned up.
+    incident_retention_closed_days: int = 0
+
     # ── Validators ───────────────────────────────────────────────────────────
     # These run when values arrive via __init__ kwargs (e.g. in tests).
     # The custom sources above handle the same conversion for .env / env vars.
-    @field_validator("always_notify_schedule_names", "check_oncall_schedule_names", mode="before")
+    @field_validator(
+        "always_notify_schedule_names", "check_oncall_schedule_names", mode="before"
+    )
     @classmethod
-    def _coerce_csv(cls, v: object) -> List[str]:
+    def _coerce_csv(cls, v: object) -> list[str]:
         if isinstance(v, str):
             return _parse_csv_or_json("always_notify_schedule_names", v)  # type: ignore[arg-type]
         return v  # type: ignore[return-value]
+
+    @model_validator(mode="after")
+    def _parse_derived_fields(self) -> Settings:
+        object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
+        object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
+        return self
 
     # ── Custom sources ────────────────────────────────────────────────────────
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls: Type[BaseSettings],
+        settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
             _CsvAwareEnvSource(settings_cls),

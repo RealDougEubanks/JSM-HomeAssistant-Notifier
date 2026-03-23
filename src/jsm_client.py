@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -41,13 +41,20 @@ class JSMClient:
         self.my_user_id = my_user_id
 
         # name → schedule_id  (populated lazily, never invalidated)
-        self._schedule_id_cache: Dict[str, str] = {}
+        self._schedule_id_cache: dict[str, str] = {}
         # schedule_id → (is_on_call, fetched_at_timestamp)
-        self._oncall_cache: Dict[str, Tuple[bool, float]] = {}
+        self._oncall_cache: dict[str, tuple[bool, float]] = {}
+
+        # Persistent HTTP client — reused across requests to avoid socket churn.
+        self._http: httpx.AsyncClient = httpx.AsyncClient(trust_env=False)
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client.  Called during application shutdown."""
+        await self._http.aclose()
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
-    def _base_headers(self) -> Dict[str, str]:
+    def _base_headers(self) -> dict[str, str]:
         return {"Accept": "application/json"}
 
     def _schedules_url(self) -> str:
@@ -58,36 +65,35 @@ class JSMClient:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    async def get_all_schedules(self) -> List[Dict[str, Any]]:
+    async def get_all_schedules(self) -> list[dict[str, Any]]:
         """
         Return all schedules visible to the configured API token.
         Handles JSM's cursor-based pagination automatically.
         """
-        url: Optional[str] = self._schedules_url()
-        schedules: List[Dict[str, Any]] = []
+        url: str | None = self._schedules_url()
+        schedules: list[dict[str, Any]] = []
 
-        async with httpx.AsyncClient(trust_env=False) as client:
-            while url:
-                response = await client.get(
-                    url,
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-                data = response.json()
+        while url:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-                page = data.get("values") or []
-                schedules.extend(page)
+            page = data.get("values") or []
+            schedules.extend(page)
 
-                # JSM paginates via a "next" cursor parameter
-                next_cursor = data.get("paging", {}).get("next")
-                url = next_cursor if next_cursor else None
+            # JSM paginates via a "next" cursor parameter
+            next_cursor = data.get("paging", {}).get("next")
+            url = next_cursor if next_cursor else None
 
         logger.debug("Fetched %d schedules from JSM", len(schedules))
         return schedules
 
-    async def get_schedule_id(self, schedule_name: str) -> Optional[str]:
+    async def get_schedule_id(self, schedule_name: str) -> str | None:
         """
         Return the schedule ID for *schedule_name*, refreshing the local
         name→ID cache from the API if the name is not yet known.
@@ -111,8 +117,7 @@ class JSMClient:
         found = self._schedule_id_cache.get(schedule_name)
         if not found:
             logger.warning(
-                "Schedule '%s' not found in JSM. "
-                "Available schedules: %s",
+                "Schedule '%s' not found in JSM. " "Available schedules: %s",
                 schedule_name,
                 list(self._schedule_id_cache.keys()),
             )
@@ -135,26 +140,21 @@ class JSMClient:
         if cached is not None:
             is_on_call, fetched_at = cached
             if now - fetched_at < cache_ttl:
-                logger.debug(
-                    "On-call cache hit for %s: %s", schedule_id, is_on_call
-                )
+                logger.debug("On-call cache hit for %s: %s", schedule_id, is_on_call)
                 return is_on_call
 
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.get(
-                    self._oncall_url(schedule_id),
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await self._http.get(
+                self._oncall_url(schedule_id),
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
 
             participants = data.get("onCallParticipants") or []
-            is_on_call = any(
-                p.get("id") == self.my_user_id for p in participants
-            )
+            is_on_call = any(p.get("id") == self.my_user_id for p in participants)
             self._oncall_cache[schedule_id] = (is_on_call, now)
             logger.info(
                 "On-call status for schedule %s: %s (participants: %s)",
@@ -189,13 +189,12 @@ class JSMClient:
         """
         url = self._schedules_url()
         try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.get(
-                    url,
-                    auth=self._auth,
-                    headers=self._base_headers(),
-                    timeout=_REQUEST_TIMEOUT,
-                )
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
             if response.status_code == 401:
                 return False, "401 Unauthorized — token is invalid or has been revoked"
             if response.status_code == 403:
@@ -215,6 +214,85 @@ class JSMClient:
             msg = f"Connection error: {exc}"
             logger.error("Credential check failed: %s", msg)
             return False, msg
+
+    async def acknowledge_alert(self, alert_id: str) -> tuple[bool, str]:
+        """
+        Acknowledge an alert via the JSM Ops API.
+
+        Returns (True, "") on success, or (False, error_detail) on failure.
+        """
+        url = (
+            f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}/acknowledge"
+        )
+        try:
+            response = await self._http.post(
+                url,
+                auth=self._auth,
+                headers={**self._base_headers(), "Content-Type": "application/json"},
+                json={"user": self.my_user_id},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            if response.status_code in (200, 202):
+                logger.info("Alert %s acknowledged via JSM API", alert_id)
+                return True, ""
+            response.raise_for_status()
+            return True, ""
+        except httpx.HTTPStatusError as exc:
+            msg = f"HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
+            return False, msg
+        except Exception as exc:
+            msg = str(exc)
+            logger.error("Failed to acknowledge alert %s: %s", alert_id, msg)
+            return False, msg
+
+    async def get_alert_details(self, alert_id: str) -> dict[str, Any] | None:
+        """
+        Fetch full alert details from JSM, including extra context like
+        responders, teams, tags, and custom details.
+
+        Returns the alert dict on success, None on failure.
+        """
+        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts/{alert_id}"
+        try:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            # JSM wraps the alert in a "data" key.
+            return data.get("data", data)  # type: ignore[return-value]
+        except Exception as exc:
+            logger.warning("Failed to fetch alert details for %s: %s", alert_id, exc)
+            return None
+
+    async def list_open_alerts(self, limit: int = 100) -> list[dict[str, Any]]:
+        """
+        Fetch open alerts from the JSM Ops API.
+
+        Returns a list of alert dicts suitable for ``IncidentStore.bulk_upsert``.
+        On failure returns an empty list (non-fatal).
+        """
+        url = f"{self.api_url}/jsm/ops/api/{self.cloud_id}/v1/alerts"
+        try:
+            response = await self._http.get(
+                url,
+                auth=self._auth,
+                headers=self._base_headers(),
+                params={"limit": limit, "order": "desc", "sort": "createdAt"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            alerts = data.get("data") or data.get("values") or []
+            logger.info("Fetched %d alerts from JSM API", len(alerts))
+            return alerts  # type: ignore[return-value]
+        except Exception as exc:
+            logger.error("Failed to fetch alerts from JSM: %s", exc)
+            return []
 
     def invalidate_oncall_cache(self) -> None:
         """Force the next on-call check to hit the API (useful after rotation)."""
