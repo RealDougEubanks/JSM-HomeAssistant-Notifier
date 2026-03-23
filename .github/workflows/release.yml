@@ -19,7 +19,7 @@ jobs:
 
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+      HAS_DOCKERHUB: ${{ vars.DOCKERHUB_USERNAME != '' }}
 
     permissions:
       contents: read
@@ -56,7 +56,7 @@ jobs:
         # Only attempt Docker Hub login if credentials are configured.
         if: env.HAS_DOCKERHUB == 'true'
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ── Metadata ────────────────────────────────────────────────────────
