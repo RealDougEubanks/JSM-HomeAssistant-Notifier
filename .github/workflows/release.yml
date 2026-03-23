@@ -19,6 +19,7 @@ jobs:
 
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      HAS_DOCKERHUB: ${{ vars.DOCKERHUB_USERNAME != '' }}
 
     permissions:
       contents: read
@@ -53,9 +54,9 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         # Only attempt Docker Hub login if credentials are configured.
-        if: vars.DOCKERHUB_USERNAME != ''
+        if: env.HAS_DOCKERHUB == 'true'
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ── Metadata ────────────────────────────────────────────────────────
@@ -128,6 +129,16 @@ jobs:
         with:
           sarif_file: "trivy-results.sarif"
         continue-on-error: true
+
+      # ── Docker Hub README sync ───────────────────────────────────────────
+      - name: Update Docker Hub repository description
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        if: env.HAS_DOCKERHUB == 'true'
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: ${{ github.event.repository.description }}
 
       # ── Summary ─────────────────────────────────────────────────────────
       - name: Job summary
