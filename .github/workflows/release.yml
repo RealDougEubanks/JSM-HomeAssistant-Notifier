@@ -130,6 +130,16 @@ jobs:
           sarif_file: "trivy-results.sarif"
         continue-on-error: true
 
+      # ── Docker Hub README sync ───────────────────────────────────────────
+      - name: Update Docker Hub repository description
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        if: env.HAS_DOCKERHUB == 'true'
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: ${{ github.event.repository.description }}
+
       # ── Summary ─────────────────────────────────────────────────────────
       - name: Job summary
         run: |
