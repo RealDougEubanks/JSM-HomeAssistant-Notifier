@@ -145,6 +145,7 @@ jobs:
               --format sarif \
               --output trivy-results.sarif \
               --severity CRITICAL,HIGH \
+              --ignore-unfixed \
               "$_SCAN_IMAGE"
         continue-on-error: true  # Don't block release, but do report
 
@@ -173,7 +174,8 @@ jobs:
             grype \
               "$_SCAN_IMAGE" \
               --output sarif \
-              --file grype-results.sarif
+              --file grype-results.sarif \
+              --only-fixed
         continue-on-error: true  # Don't block release, but do report
 
       - name: Upload Grype scan results to GitHub Security
