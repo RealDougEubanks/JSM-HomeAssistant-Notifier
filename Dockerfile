@@ -3,8 +3,11 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install build tools for any packages that need compilation
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Upgrade OS packages first to pick up any patched base-image vulnerabilities,
+# then install only the build tools needed for compilation.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,6 +24,14 @@ FROM python:3.12-slim
 RUN groupadd -r appgroup && useradd -r -g appgroup -u 1000 appuser
 
 WORKDIR /app
+
+# Upgrade OS packages to patch any vulnerabilities in the base image
+# (e.g. zlib, libsystemd0), and upgrade pip so the runtime pip is current.
+# Must run as root before the USER switch below.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip
 
 # Copy installed packages from the builder stage
 COPY --from=builder /install /usr/local
