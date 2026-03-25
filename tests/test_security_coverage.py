@@ -520,3 +520,60 @@ async def test_api_key_path_prefix_on_status(client, app):
             assert resp.status_code == 200
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+# ── All protected endpoints return 404 without API key ───────────────────────
+
+
+# Every endpoint gated by Depends(_require_api_key) must return 404 when
+# WEBHOOK_API_KEY is set and no key is provided.  This prevents attackers
+# from discovering which endpoints exist.
+
+_PROTECTED_ENDPOINTS = [
+    ("GET", "/healthz"),
+    ("GET", "/status"),
+    ("POST", "/cache/invalidate"),
+    ("GET", "/incidents"),
+    ("GET", "/incidents/summary"),
+    ("GET", "/incidents/test-alert-id"),
+    ("POST", "/incidents/test-alert-id/close"),
+    ("POST", "/incidents/sync"),
+    ("POST", "/alert/test-alert-id/acknowledge"),
+    ("POST", "/alert"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", _PROTECTED_ENDPOINTS)
+async def test_all_protected_endpoints_return_404_without_key(client, app, method, path):
+    """Every protected endpoint must return 404 when API key is set but not provided."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "required-key"})
+    try:
+        if method == "GET":
+            resp = await client.get(path)
+        else:
+            resp = await client.post(path, content=b"{}")
+        assert resp.status_code == 404, (
+            f"{method} {path} returned {resp.status_code}, expected 404"
+        )
+        assert resp.json() == {"detail": "Not found"}
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", _PROTECTED_ENDPOINTS)
+async def test_all_protected_endpoints_return_404_with_wrong_key(client, app, method, path):
+    """Every protected endpoint must return 404 with an incorrect API key."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "correct-key"})
+    try:
+        if method == "GET":
+            resp = await client.get(path, params={"key": "wrong-key"})
+        else:
+            resp = await client.post(path, content=b"{}", params={"key": "wrong-key"})
+        assert resp.status_code == 404, (
+            f"{method} {path} returned {resp.status_code}, expected 404"
+        )
+        assert resp.json() == {"detail": "Not found"}
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
