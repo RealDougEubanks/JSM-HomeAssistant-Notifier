@@ -73,7 +73,6 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         username=settings.jsm_username,
         api_token=settings.jsm_api_token,
         my_user_id=settings.jsm_my_user_id,
-        jira_base_url=settings.jira_base_url,
     )
 
     ha_client = HAClient(

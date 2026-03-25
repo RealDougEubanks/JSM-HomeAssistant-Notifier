@@ -86,10 +86,8 @@ class Settings(BaseSettings):
     )
 
     # ── Atlassian / JSM ──────────────────────────────────────────────────────
+    # Atlassian API base URL — do not change unless Atlassian moves the endpoint.
     jsm_api_url: str = "https://api.atlassian.com"
-    jira_base_url: str = (
-        ""  # e.g. https://your-org.atlassian.net (reserved; not currently used)
-    )
     jsm_cloud_id: str
     jsm_username: str
     jsm_api_token: str
