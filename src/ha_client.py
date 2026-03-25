@@ -483,7 +483,7 @@ class HAClient:
         )
         notif_message = (
             "The `JSM_API_TOKEN` in your `.env` file is invalid or has been revoked.\n\n"
-            f"**Error:** {error_detail}\n\n"
+            f"**Error:** {_sanitize(error_detail)}\n\n"
             "**Action required:** Create a new token at "
             "https://id.atlassian.com/manage-profile/security/api-tokens "
             "and update `JSM_API_TOKEN` in `.env`, then run `docker compose restart`."

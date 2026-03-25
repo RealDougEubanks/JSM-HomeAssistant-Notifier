@@ -553,6 +553,8 @@ async def get_incident(
     """Return a single incident by alert ID."""
     if not _verify_api_key(key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not _ALERT_ID_RE.match(alert_id):
+        raise HTTPException(status_code=400, detail="Invalid alert_id format")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -579,6 +581,8 @@ async def force_close_incident(
     """
     if not _verify_api_key(key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not _ALERT_ID_RE.match(alert_id):
+        raise HTTPException(status_code=400, detail="Invalid alert_id format")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
