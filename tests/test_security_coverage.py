@@ -169,12 +169,12 @@ async def test_api_key_valid(client, app):
 
 @pytest.mark.asyncio
 async def test_api_key_wrong(client, app):
-    """Wrong API key should be rejected."""
+    """Wrong API key returns 404 to hide endpoint existence."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "mykey123"})
     try:
         body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
         resp = await client.post("/alert?key=wrongkey", content=body)
-        assert resp.status_code == 401
+        assert resp.status_code == 404
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
 
@@ -413,26 +413,26 @@ async def test_api_key_via_path_prefix(client, app):
 
 @pytest.mark.asyncio
 async def test_api_key_wrong_query_param_rejected(client, app):
-    """Wrong ?key= value should be rejected."""
+    """Wrong ?key= value returns 404."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz?key=wrong")
-            assert resp.status_code == 401
+            assert resp.status_code == 404
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_wrong_header_rejected(client, app):
-    """Wrong X-API-Key header should be rejected."""
+    """Wrong X-API-Key header returns 404."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz", headers={"X-API-Key": "wrong"})
-            assert resp.status_code == 401
+            assert resp.status_code == 404
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
 
@@ -450,13 +450,13 @@ async def test_api_key_wrong_path_prefix_rejected(client, app):
 
 @pytest.mark.asyncio
 async def test_api_key_no_credentials_rejected(client, app):
-    """No credentials at all should be rejected when API key is set."""
+    """No credentials returns 404 (endpoint appears to not exist)."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz")
-            assert resp.status_code == 401
+            assert resp.status_code == 404
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
 

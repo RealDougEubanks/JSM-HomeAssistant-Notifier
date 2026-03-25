@@ -425,9 +425,15 @@ def _verify_api_key(key: str | None, request: Request | None = None) -> bool:
 async def _require_api_key(
     request: Request, key: str | None = Query(None)
 ) -> None:
-    """FastAPI dependency that enforces API key auth from any source."""
+    """FastAPI dependency that enforces API key auth from any source.
+
+    Returns 404 (not 401/403) when the key is invalid or missing, so
+    unauthenticated clients cannot distinguish 'wrong key' from
+    'endpoint does not exist'.  This prevents attackers from confirming
+    that authenticated endpoints exist or brute-forcing keys.
+    """
     if not _verify_api_key(key, request):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

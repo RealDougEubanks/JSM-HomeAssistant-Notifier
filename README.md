@@ -1232,13 +1232,15 @@ uvicorn src.main:app --reload --port 8080
 
 ### "Schedule not found" error
 
-The service logs all available schedule names when a lookup fails:
+Schedule names in `.env` must match JSM exactly (case-sensitive).  List your schedules:
 
 ```bash
-docker compose logs jsm-ha-notifier | grep "Available schedules"
+curl -s -u "you@yourcompany.com:YOUR_API_TOKEN" \
+  "https://api.atlassian.com/jsm/ops/api/YOUR_CLOUD_ID/v1/schedules" \
+  | python3 -m json.tool | grep '"name"'
 ```
 
-Copy the exact name (case-sensitive) from the output into `.env` and restart.
+Copy the exact name into `.env` and restart.
 
 ### No audio / TTS not playing
 
@@ -1265,6 +1267,19 @@ The on-call cache may be stale.  Force a refresh:
 ```bash
 curl -X POST http://localhost:8080/cache/invalidate
 ```
+
+### Getting 404 on endpoints that should exist
+
+When `WEBHOOK_API_KEY` is set, endpoints return **404 Not Found** (not 401) if the API key is missing or wrong.  This is intentional — it prevents attackers from discovering that authenticated endpoints exist.  If you're getting unexpected 404s:
+
+1. Confirm `WEBHOOK_API_KEY` is set in your `.env`
+2. Confirm your request includes the key via one of:
+   - Query parameter: `?key=YOUR_KEY`
+   - Path prefix: `/YOUR_KEY/endpoint`
+   - HTTP header: `X-API-Key: YOUR_KEY`
+3. Verify the key value matches exactly (no extra whitespace)
+
+The `/health` and `/robots.txt` endpoints are always unauthenticated.
 
 ### Invalid webhook signature
 

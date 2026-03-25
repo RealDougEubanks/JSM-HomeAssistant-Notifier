@@ -217,6 +217,7 @@ async def test_acknowledge_jsm_failure(client):
 
 @pytest.mark.asyncio
 async def test_api_key_required_when_set(client):
+    """Missing API key returns 404 (not 401) to hide endpoint existence."""
     import src.main as main_mod
 
     main_mod._settings = main_mod._settings.model_copy(
@@ -227,7 +228,7 @@ async def test_api_key_required_when_set(client):
             "/alert",
             content=b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}',
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 404
     finally:
         main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
 
@@ -341,7 +342,7 @@ async def test_deep_health_schedule_validation(client):
 
 @pytest.mark.asyncio
 async def test_deep_health_api_key_required(client):
-    """When WEBHOOK_API_KEY is set, /healthz requires ?key=."""
+    """When WEBHOOK_API_KEY is set, /healthz returns 404 without key."""
     import src.main as main_mod
 
     main_mod._settings = main_mod._settings.model_copy(
@@ -351,7 +352,7 @@ async def test_deep_health_api_key_required(client):
         p1, p2, p3 = _patch_healthz()
         with p1, p2, p3:
             resp = await client.get("/healthz")
-            assert resp.status_code == 401
+            assert resp.status_code == 404
 
             resp = await client.get("/healthz?key=secret123")
             assert resp.status_code == 200
