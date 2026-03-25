@@ -1093,7 +1093,55 @@ Returns `{"status": "ok"}`.  Used by Docker health-check and external monitors.
 
 ### `GET /healthz`
 
-Deep health check — verifies JSM API credentials and HA API connectivity.  Returns 200 with `{"healthy": true, ...}` if both pass, or 503 if either fails.  Use this for readiness probes or monitoring dashboards.
+Deep health check — verifies JSM and HA connectivity, validates configured schedules, and reports operational state.  Returns 200 if core checks pass, 503 if any fail.  Gated by `?key=` when `WEBHOOK_API_KEY` is set.
+
+```json
+{
+  "healthy": true,
+  "timestamp": "2026-03-25T14:32:01+00:00",
+  "started_at": "2026-03-25T14:00:00+00:00",
+  "uptime_seconds": 1921.0,
+  "version": "2.0.0",
+  "checks": { "jsm_api": "ok", "ha_api": "ok" },
+  "schedules": {
+    "check_oncall": {
+      "Cloud Engineering On-Call Schedule": {
+        "schedule_id": "abc-123",
+        "exists_in_jsm": true,
+        "on_call": true
+      }
+    },
+    "always_notify": ["Internal Systems_schedule"]
+  },
+  "cache": {
+    "schedule_id_entries": 2,
+    "oncall_entries": 1,
+    "dedup_entries": 0
+  },
+  "background_tasks": {
+    "batch_queue_size": 0,
+    "active_tts_repeats": 0,
+    "tts_repeat_alert_ids": []
+  },
+  "incident_dashboard": { "enabled": false },
+  "configuration": {
+    "oncall_cache_ttl_seconds": 300,
+    "alert_dedup_ttl_seconds": 60,
+    "token_check_interval_hours": 24,
+    "alert_batch_window_seconds": 0,
+    "tts_repeat_interval_seconds": 0,
+    "tts_repeat_max": 5,
+    "tts_repeat_priorities": "P1",
+    "silent_window": "(none)",
+    "terse_window": "(none)",
+    "webhook_secret_configured": true,
+    "webhook_api_key_configured": true,
+    "emojis_enabled": true
+  }
+}
+```
+
+No tokens, secrets, URLs, or user IDs are included in the response.
 
 ### `GET /status`
 
@@ -1101,7 +1149,6 @@ Returns current on-call status for all watched schedules (forces a fresh JSM API
 
 ```json
 {
-  "user_id": "your-account-id",
   "on_call_schedules": {
     "Your On-Call Schedule": {
       "schedule_id": "abc-123",

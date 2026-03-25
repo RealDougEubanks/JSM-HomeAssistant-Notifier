@@ -34,7 +34,9 @@ import logging
 import re
 import secrets
 import sys
+import time as _time
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
@@ -64,8 +66,14 @@ logger = logging.getLogger(__name__)
 
 # ── Application bootstrap ─────────────────────────────────────────────────────
 
+_STARTUP_MONOTONIC: float = 0.0
+_STARTUP_WALL: str = ""
+
 
 def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | None]:
+    global _STARTUP_MONOTONIC, _STARTUP_WALL  # noqa: PLW0603
+    _STARTUP_MONOTONIC = _time.monotonic()
+    _STARTUP_WALL = datetime.now(timezone.utc).isoformat()
     settings = Settings()  # Reads from .env / env vars
 
     jsm_client = JSMClient(
@@ -293,28 +301,115 @@ async def health_check():
 
 
 @app.get("/healthz", tags=["ops"])
-async def deep_health_check():
+async def deep_health_check(key: str | None = Query(None)):
     """
-    Deep health check — verifies JSM and HA API connectivity.
+    Deep health check — verifies JSM and HA API connectivity, schedule
+    validation, on-call status, and operational state.
 
-    Returns 200 if all checks pass, 503 if any fail.  Useful for monitoring
-    dashboards and more thorough readiness probes.
+    Returns 200 if core checks pass, 503 if any fail.  Gated by the same
+    ``?key=`` API key as other endpoints when ``WEBHOOK_API_KEY`` is set.
     """
-    checks: dict = {}
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-    jsm_ok, jsm_err = await _processor.jsm_client.verify_credentials()
-    checks["jsm_api"] = "ok" if jsm_ok else "error"
+    # ── Core connectivity checks (run in parallel) ────────────────────
+    jsm_coro = _processor.jsm_client.verify_credentials()
+    ha_coro = _processor.ha_client.verify_connectivity()
+    (jsm_ok, jsm_err), (ha_ok, ha_err) = await asyncio.gather(jsm_coro, ha_coro)
+
+    checks: dict[str, str] = {
+        "jsm_api": "ok" if jsm_ok else "error",
+        "ha_api": "ok" if ha_ok else "error",
+    }
     if not jsm_ok:
         logger.warning("Deep health check: JSM API failed — %s", jsm_err)
-
-    ha_ok, ha_err = await _processor.ha_client.verify_connectivity()
-    checks["ha_api"] = "ok" if ha_ok else "error"
     if not ha_ok:
         logger.warning("Deep health check: HA API failed — %s", ha_err)
 
+    # ── Schedule validation + on-call status ──────────────────────────
+    # Cap to prevent abuse — only check configured schedules.
+    _MAX_SCHEDULES = 50
+    check_oncall: dict[str, dict[str, object]] = {}
+    names = _settings.check_oncall_schedule_names[:_MAX_SCHEDULES]
+    for name in names:
+        schedule_id = await _processor.jsm_client.get_schedule_id(name)
+        if schedule_id:
+            is_on_call = await _processor.jsm_client.is_on_call(
+                schedule_id, cache_ttl=0
+            )
+            check_oncall[name] = {
+                "schedule_id": schedule_id,
+                "exists_in_jsm": True,
+                "on_call": is_on_call,
+            }
+        else:
+            check_oncall[name] = {
+                "schedule_id": None,
+                "exists_in_jsm": False,
+                "on_call": None,
+                "error": "Schedule not found in JSM API",
+            }
+
+    schedules = {
+        "check_oncall": check_oncall,
+        "always_notify": list(
+            _settings.always_notify_schedule_names[:_MAX_SCHEDULES]
+        ),
+    }
+
+    # ── Operational state ─────────────────────────────────────────────
+    uptime = round(_time.monotonic() - _STARTUP_MONOTONIC, 1)
+
+    op_stats = _processor.operational_stats()
+
+    cache = _processor.jsm_client.cache_stats()
+    cache["dedup_entries"] = op_stats["dedup_cache_size"]
+
+    background_tasks = {
+        "batch_queue_size": op_stats["batch_queue_size"],
+        "active_tts_repeats": op_stats["active_tts_repeats"],
+        "tts_repeat_alert_ids": op_stats["tts_repeat_alert_ids"],
+    }
+
+    incident_dashboard = {
+        "enabled": _settings.incident_dashboard_enabled,
+    }
+    if _settings.incident_dashboard_enabled:
+        incident_dashboard["sync_interval_minutes"] = (
+            _settings.incident_sync_interval_minutes
+        )
+
+    # Non-sensitive configuration summary — no tokens, secrets, or URLs.
+    configuration = {
+        "oncall_cache_ttl_seconds": _settings.oncall_cache_ttl_seconds,
+        "alert_dedup_ttl_seconds": _settings.alert_dedup_ttl_seconds,
+        "token_check_interval_hours": _settings.token_check_interval_hours,
+        "alert_batch_window_seconds": _settings.alert_batch_window_seconds,
+        "tts_repeat_interval_seconds": _settings.tts_repeat_interval_seconds,
+        "tts_repeat_max": _settings.tts_repeat_max,
+        "tts_repeat_priorities": _settings.tts_repeat_priorities,
+        "silent_window": _settings.silent_window or "(none)",
+        "terse_window": _settings.terse_window or "(none)",
+        "webhook_secret_configured": bool(_settings.webhook_secret),
+        "webhook_api_key_configured": bool(_settings.webhook_api_key),
+        "emojis_enabled": _settings.enable_emojis,
+    }
+
     all_ok = all(v == "ok" for v in checks.values())
     return JSONResponse(
-        {"healthy": all_ok, "checks": checks},
+        {
+            "healthy": all_ok,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "started_at": _STARTUP_WALL,
+            "uptime_seconds": uptime,
+            "version": app.version,
+            "checks": checks,
+            "schedules": schedules,
+            "cache": cache,
+            "background_tasks": background_tasks,
+            "incident_dashboard": incident_dashboard,
+            "configuration": configuration,
+        },
         status_code=200 if all_ok else 503,
     )
 
@@ -338,7 +433,6 @@ async def on_call_status():
             status[name] = {"schedule_id": None, "on_call": None, "error": "not found"}
 
     return {
-        "user_id": _settings.jsm_my_user_id,
         "on_call_schedules": status,
         "always_notify_schedules": _settings.always_notify_schedule_names,
     }

@@ -294,3 +294,10 @@ class JSMClient:
         """Force the next on-call check to hit the API (useful after rotation)."""
         self._oncall_cache.clear()
         logger.info("On-call cache invalidated")
+
+    def cache_stats(self) -> dict[str, int]:
+        """Return cache sizes for operational visibility (no values leaked)."""
+        return {
+            "schedule_id_entries": len(self._schedule_id_cache),
+            "oncall_entries": len(self._oncall_cache),
+        }
