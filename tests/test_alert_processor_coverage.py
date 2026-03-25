@@ -29,7 +29,9 @@ def _settings(**kwargs) -> Settings:
     return Settings(**defaults)
 
 
-def _processor(settings: Settings | None = None, is_on_call: bool = True) -> AlertProcessor:
+def _processor(
+    settings: Settings | None = None, is_on_call: bool = True
+) -> AlertProcessor:
     s = settings or _settings()
     jsm = MagicMock(spec=JSMClient)
     jsm.my_user_id = s.jsm_my_user_id
@@ -149,7 +151,9 @@ async def test_enqueue_batch_creates_timer():
 @pytest.mark.asyncio
 async def test_repeat_tts_loop_exhausted():
     """Repeat loop should run max_repeats times then clean up."""
-    s = _settings(tts_repeat_interval_seconds=0, tts_repeat_max=2, tts_repeat_priorities="P1")
+    s = _settings(
+        tts_repeat_interval_seconds=0, tts_repeat_max=2, tts_repeat_priorities="P1"
+    )
     proc = _processor(s)
     # Override interval to 0 for fast test
     proc.settings = proc.settings.model_copy(update={"tts_repeat_interval_seconds": 0})
@@ -166,7 +170,9 @@ async def test_repeat_tts_loop_exhausted():
 @pytest.mark.asyncio
 async def test_repeat_tts_loop_cancelled():
     """Cancelling the loop should clean up the task."""
-    s = _settings(tts_repeat_interval_seconds=9999, tts_repeat_max=10, tts_repeat_priorities="P1")
+    s = _settings(
+        tts_repeat_interval_seconds=9999, tts_repeat_max=10, tts_repeat_priorities="P1"
+    )
     proc = _processor(s)
     alert = make_alert(priority="P1").alert
 
@@ -294,12 +300,14 @@ async def test_process_enriches_alert_on_create():
     store = MagicMock()
     store.upsert = AsyncMock()
     proc.incident_store = store
-    proc.jsm_client.get_alert_details = AsyncMock(return_value={
-        "tags": ["production"],
-        "teams": [{"id": "t1"}],
-        "responders": [],
-        "details": {"runbook": "http://run.book"},
-    })
+    proc.jsm_client.get_alert_details = AsyncMock(
+        return_value={
+            "tags": ["production"],
+            "teams": [{"id": "t1"}],
+            "responders": [],
+            "details": {"runbook": "http://run.book"},
+        }
+    )
 
     payload = make_alert(action="Create")
     await proc.process(payload, always_notify=True)

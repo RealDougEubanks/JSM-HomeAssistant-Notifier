@@ -91,7 +91,9 @@ def _rate_limited(client_ip: str) -> bool:
 
     # Evict oldest half if tracking too many IPs (DoS protection).
     if len(_rate_buckets) >= _MAX_TRACKED_IPS:
-        to_remove = sorted(_rate_buckets, key=lambda k: _rate_buckets[k][-1] if _rate_buckets[k] else 0)
+        to_remove = sorted(
+            _rate_buckets, key=lambda k: _rate_buckets[k][-1] if _rate_buckets[k] else 0
+        )
         for k in to_remove[: len(to_remove) // 2]:
             del _rate_buckets[k]
 
@@ -106,7 +108,9 @@ def _rate_limited(client_ip: str) -> bool:
     timestamps.append(now)
     return False
 
+
 # ── Logging ───────────────────────────────────────────────────────────────────
+
 
 class _JsonFormatter(logging.Formatter):
     """Emit each log record as a single JSON line for log aggregators."""
@@ -253,9 +257,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
                         error,
                     )
                 else:
-                    logger.error(
-                        "Credential check FAILED: %s — firing HA alert.", error
-                    )
+                    logger.error("Credential check FAILED: %s — firing HA alert.", error)
                 await ha_client.send_credential_alert(error, suppress_tts=quiet)
 
             await asyncio.sleep(interval_seconds)
@@ -348,7 +350,9 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["Content-Security-Policy"] = "default-src 'none'"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, max-age=0"
+        )
         response.headers["Pragma"] = "no-cache"
         response.headers["Server"] = "webhook-receiver"
         return response
@@ -371,7 +375,11 @@ class _ApiKeyPathMiddleware(BaseHTTPMiddleware):
         if configured_key and request.url.path != "/":
             # Split path: /KEY/healthz → ["", "KEY", "healthz"]
             parts = request.url.path.split("/", 2)
-            if len(parts) >= 2 and parts[1] and secrets.compare_digest(parts[1], configured_key):
+            if (
+                len(parts) >= 2
+                and parts[1]
+                and secrets.compare_digest(parts[1], configured_key)
+            ):
                 # Rewrite path with key segment removed.
                 new_path = "/" + parts[2] if len(parts) > 2 else "/"
                 request.scope["path"] = new_path
@@ -469,9 +477,7 @@ def _verify_api_key(key: str | None, request: Request | None = None) -> bool:
     return False
 
 
-async def _require_api_key(
-    request: Request, key: str | None = Query(None)
-) -> None:
+async def _require_api_key(request: Request, key: str | None = Query(None)) -> None:
     """FastAPI dependency that enforces API key auth from any source.
 
     Returns 404 (not 401/403) when the key is invalid or missing, so
@@ -553,9 +559,7 @@ async def deep_health_check():
     for name in names:
         schedule_id = await _processor.jsm_client.get_schedule_id(name)
         if schedule_id:
-            is_on_call = await _processor.jsm_client.is_on_call(
-                schedule_id, cache_ttl=0
-            )
+            is_on_call = await _processor.jsm_client.is_on_call(schedule_id, cache_ttl=0)
             check_oncall[name] = {
                 "schedule_id": schedule_id,
                 "exists_in_jsm": True,
@@ -571,9 +575,7 @@ async def deep_health_check():
 
     schedules = {
         "check_oncall": check_oncall,
-        "always_notify": list(
-            _settings.always_notify_schedule_names[:_MAX_SCHEDULES]
-        ),
+        "always_notify": list(_settings.always_notify_schedule_names[:_MAX_SCHEDULES]),
     }
 
     # ── Operational state ─────────────────────────────────────────────
@@ -756,7 +758,9 @@ async def list_incidents(
     return JSONResponse(content={"incidents": incidents, "count": len(incidents)})
 
 
-@app.get("/incidents/summary", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/incidents/summary", tags=["dashboard"], dependencies=[Depends(_require_api_key)]
+)
 async def incident_summary():
     """Return aggregate incident counts by status and priority."""
     if not _incident_store:
@@ -768,7 +772,9 @@ async def incident_summary():
     return JSONResponse(content=summary)
 
 
-@app.get("/incidents/{alert_id}", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/incidents/{alert_id}", tags=["dashboard"], dependencies=[Depends(_require_api_key)]
+)
 async def get_incident(
     alert_id: str = Path(..., description="Alert ID to look up"),
 ):
@@ -786,7 +792,11 @@ async def get_incident(
     return JSONResponse(content=incident)
 
 
-@app.post("/incidents/{alert_id}/close", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/incidents/{alert_id}/close",
+    tags=["dashboard"],
+    dependencies=[Depends(_require_api_key)],
+)
 async def force_close_incident(
     alert_id: str = Path(..., description="Alert ID to force-close"),
 ):
@@ -831,7 +841,11 @@ async def force_incident_sync():
 _ALERT_ID_RE = re.compile(r"^[a-zA-Z0-9\-_]{1,200}$")
 
 
-@app.post("/alert/{alert_id}/acknowledge", tags=["webhook"], dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/alert/{alert_id}/acknowledge",
+    tags=["webhook"],
+    dependencies=[Depends(_require_api_key)],
+)
 async def acknowledge_alert(
     request: Request,
     alert_id: str = Path(
@@ -899,7 +913,11 @@ async def receive_alert(
     # Early rejection based on Content-Length header before reading body
     # into memory. Prevents large payloads from consuming server RAM.
     content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > _MAX_BODY_BYTES:
+    if (
+        content_length
+        and content_length.isdigit()
+        and int(content_length) > _MAX_BODY_BYTES
+    ):
         logger.warning(
             "Rejecting request with Content-Length %s from %s",
             content_length,

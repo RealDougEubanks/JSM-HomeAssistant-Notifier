@@ -357,9 +357,7 @@ async def test_deep_health_api_key_required(client):
             resp = await client.get("/healthz?key=secret123")
             assert resp.status_code == 200
     finally:
-        main_mod._settings = main_mod._settings.model_copy(
-            update={"webhook_api_key": ""}
-        )
+        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── On-call status ───────────────────────────────────────────────────────────

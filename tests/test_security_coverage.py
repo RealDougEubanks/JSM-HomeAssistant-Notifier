@@ -67,7 +67,9 @@ async def test_valid_signature_accepted(client, app):
     secret = "test-secret-key"
     app._settings = app._settings.model_copy(update={"webhook_secret": secret})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
         with patch(
@@ -90,7 +92,9 @@ async def test_invalid_signature_rejected(client, app):
     """Wrong HMAC signature should be rejected with 401."""
     app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         resp = await client.post(
             "/alert",
             content=body,
@@ -106,7 +110,9 @@ async def test_missing_signature_rejected(client, app):
     """Missing signature header when secret is set should be rejected."""
     app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         resp = await client.post("/alert", content=body)
         assert resp.status_code == 401
     finally:
@@ -118,7 +124,9 @@ async def test_malformed_signature_header(client, app):
     """Signature without sha256= prefix should be rejected."""
     app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         resp = await client.post(
             "/alert",
             content=body,
@@ -154,7 +162,9 @@ async def test_api_key_valid(client, app):
     """Valid API key should be accepted."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "mykey123"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         with patch(
             "src.alert_processor.AlertProcessor.process",
             new_callable=AsyncMock,
@@ -171,7 +181,9 @@ async def test_api_key_wrong(client, app):
     """Wrong API key returns 404 to hide endpoint existence."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "mykey123"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         resp = await client.post("/alert?key=wrongkey", content=body)
         assert resp.status_code == 404
     finally:
@@ -315,7 +327,9 @@ async def test_security_headers_present(client, app):
     assert resp.headers["X-Robots-Tag"] == "noindex, nofollow"
     assert resp.headers["Content-Security-Policy"] == "default-src 'none'"
     assert resp.headers["Referrer-Policy"] == "no-referrer"
-    assert resp.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert (
+        resp.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    )
     assert resp.headers["Pragma"] == "no-cache"
     assert resp.headers["Server"] == "webhook-receiver"
 
@@ -349,6 +363,7 @@ async def test_robots_txt(client, app):
 
 
 # ── API key: all three methods ───────────────────────────────────────────────
+
 
 # Helper to patch /healthz dependencies for API key tests.
 def _healthz_patches():
@@ -474,7 +489,9 @@ async def test_api_key_path_prefix_on_alert(client, app):
     """Path prefix auth should work on POST /alert too."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         with patch(
             "src.alert_processor.AlertProcessor.process",
             new_callable=AsyncMock,
@@ -491,7 +508,9 @@ async def test_api_key_header_on_alert(client, app):
     """X-API-Key header should work on POST /alert too."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
-        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        body = (
+            b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        )
         with patch(
             "src.alert_processor.AlertProcessor.process",
             new_callable=AsyncMock,
@@ -552,9 +571,9 @@ async def test_all_protected_endpoints_return_404_without_key(client, app, metho
             resp = await client.get(path)
         else:
             resp = await client.post(path, content=b"{}")
-        assert resp.status_code == 404, (
-            f"{method} {path} returned {resp.status_code}, expected 404"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"{method} {path} returned {resp.status_code}, expected 404"
         assert resp.json() == {"detail": "Not found"}
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
@@ -562,7 +581,9 @@ async def test_all_protected_endpoints_return_404_without_key(client, app, metho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,path", _PROTECTED_ENDPOINTS)
-async def test_all_protected_endpoints_return_404_with_wrong_key(client, app, method, path):
+async def test_all_protected_endpoints_return_404_with_wrong_key(
+    client, app, method, path
+):
     """Every protected endpoint must return 404 with an incorrect API key."""
     app._settings = app._settings.model_copy(update={"webhook_api_key": "correct-key"})
     try:
@@ -570,9 +591,9 @@ async def test_all_protected_endpoints_return_404_with_wrong_key(client, app, me
             resp = await client.get(path, params={"key": "wrong-key"})
         else:
             resp = await client.post(path, content=b"{}", params={"key": "wrong-key"})
-        assert resp.status_code == 404, (
-            f"{method} {path} returned {resp.status_code}, expected 404"
-        )
+        assert (
+            resp.status_code == 404
+        ), f"{method} {path} returned {resp.status_code}, expected 404"
         assert resp.json() == {"detail": "Not found"}
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})

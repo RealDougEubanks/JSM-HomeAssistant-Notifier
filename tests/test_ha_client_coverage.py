@@ -48,9 +48,15 @@ async def test_call_service_generic_exception():
 async def test_call_service_http_status_error():
     """HTTPStatusError should be caught and return False."""
     client = _client()
-    response = httpx.Response(500, text="Internal Server Error", request=httpx.Request("POST", "http://test"))
+    response = httpx.Response(
+        500, text="Internal Server Error", request=httpx.Request("POST", "http://test")
+    )
     client._http = AsyncMock()
-    client._http.post = AsyncMock(side_effect=httpx.HTTPStatusError("err", request=response.request, response=response))
+    client._http.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "err", request=response.request, response=response
+        )
+    )
 
     result = await client._call_service("media_player", "play_media", {})
     assert result is False
