@@ -14,7 +14,7 @@ _ENV = {
     "JSM_USERNAME": "u@e.com",
     "JSM_API_TOKEN": "tok",
     "JSM_MY_USER_ID": "uid",
-    "HA_URL": "http://ha.local:8123",
+    "HA_URL": "https://ha.local:8123",
     "HA_TOKEN": "ha-tok",
     "WEBHOOK_SECRET": "",
     "WEBHOOK_API_KEY": "",
@@ -217,6 +217,7 @@ async def test_acknowledge_jsm_failure(client):
 
 @pytest.mark.asyncio
 async def test_api_key_required_when_set(client):
+    """Missing API key returns 404 (not 401) to hide endpoint existence."""
     import src.main as main_mod
 
     main_mod._settings = main_mod._settings.model_copy(
@@ -227,7 +228,7 @@ async def test_api_key_required_when_set(client):
             "/alert",
             content=b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}',
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 404
     finally:
         main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
 
@@ -255,9 +256,9 @@ async def test_signature_required_when_set(client):
 # ── Deep health check ────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_deep_health_all_ok(client):
-    with (
+def _patch_healthz():
+    """Return patch context managers for /healthz dependencies."""
+    return (
         patch(
             "src.jsm_client.JSMClient.verify_credentials",
             new_callable=AsyncMock,
@@ -268,10 +269,29 @@ async def test_deep_health_all_ok(client):
             new_callable=AsyncMock,
             return_value=(True, ""),
         ),
-    ):
+        patch(
+            "src.jsm_client.JSMClient.get_schedule_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_deep_health_all_ok(client):
+    p1, p2, p3 = _patch_healthz()
+    with p1, p2, p3:
         resp = await client.get("/healthz")
         assert resp.status_code == 200
-        assert resp.json()["healthy"] is True
+        data = resp.json()
+        assert data["healthy"] is True
+        assert "checks" in data
+        assert "schedules" in data
+        assert "cache" in data
+        assert "background_tasks" in data
+        assert "configuration" in data
+        assert "uptime_seconds" in data
+        assert "version" in data
 
 
 @pytest.mark.asyncio
@@ -287,10 +307,57 @@ async def test_deep_health_jsm_down(client):
             new_callable=AsyncMock,
             return_value=(True, ""),
         ),
+        patch(
+            "src.jsm_client.JSMClient.get_schedule_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         resp = await client.get("/healthz")
         assert resp.status_code == 503
         assert resp.json()["healthy"] is False
+
+
+@pytest.mark.asyncio
+async def test_deep_health_no_sensitive_data(client):
+    """Ensure /healthz does not leak tokens, secrets, or user IDs."""
+    p1, p2, p3 = _patch_healthz()
+    with p1, p2, p3:
+        resp = await client.get("/healthz")
+        body = resp.text
+        for secret in ["ha-tok", "uid", "test-cloud", "ha.local"]:
+            assert secret not in body, f"Sensitive value {secret!r} found in /healthz"
+
+
+@pytest.mark.asyncio
+async def test_deep_health_schedule_validation(client):
+    """Configured schedule not in JSM should report exists_in_jsm=False."""
+    p1, p2, p3 = _patch_healthz()
+    with p1, p2, p3:
+        resp = await client.get("/healthz")
+        data = resp.json()
+        assert "check_oncall" in data["schedules"]
+        assert "always_notify" in data["schedules"]
+
+
+@pytest.mark.asyncio
+async def test_deep_health_api_key_required(client):
+    """When WEBHOOK_API_KEY is set, /healthz returns 404 without key."""
+    import src.main as main_mod
+
+    main_mod._settings = main_mod._settings.model_copy(
+        update={"webhook_api_key": "secret123"}
+    )
+    try:
+        p1, p2, p3 = _patch_healthz()
+        with p1, p2, p3:
+            resp = await client.get("/healthz")
+            assert resp.status_code == 404
+
+            resp = await client.get("/healthz?key=secret123")
+            assert resp.status_code == 200
+    finally:
+        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── On-call status ───────────────────────────────────────────────────────────
@@ -307,3 +374,49 @@ async def test_status_endpoint(client):
     ):
         resp = await client.get("/status")
         assert resp.status_code == 200
+        data = resp.json()
+        assert "user_id" not in data
+
+
+# ── Metrics endpoint ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint(client):
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "jsm_notifier_alerts_received_total" in body
+    assert "jsm_notifier_uptime_seconds" in body
+    assert resp.headers["content-type"].startswith("text/plain")
+
+
+# ── Reload endpoint ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reload_success(client):
+    import src.main as main_mod
+
+    main_mod._last_reload = 0.0  # reset cooldown
+    resp = await client.post("/reload")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "reloaded"
+
+
+@pytest.mark.asyncio
+async def test_reload_requires_api_key(client):
+    import src.main as main_mod
+
+    main_mod._last_reload = 0.0  # reset cooldown
+    main_mod._settings = main_mod._settings.model_copy(
+        update={"webhook_api_key": "reloadkey"}
+    )
+    try:
+        resp = await client.post("/reload")
+        assert resp.status_code == 404  # 404 stealth when no key
+
+        resp = await client.post("/reload?key=reloadkey")
+        assert resp.status_code == 200
+    finally:
+        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})

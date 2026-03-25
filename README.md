@@ -53,7 +53,7 @@ JSM alert created / escalated
 - **Alert batching** — combine multiple alerts arriving within a configurable window into one TTS announcement
 - **TTS repeat (pager mode)** — repeat TTS at intervals for critical alerts until acknowledged or max repeats hit
 - **Acknowledge from HA** — `POST /alert/{id}/acknowledge` endpoint lets HA automations ack alerts without opening JSM
-- **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
+- **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if expired (TTS suppressed during quiet hours; persistent notification still created)
 - **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
 - **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
 - **HA automation webhooks** — fire HA webhook triggers on Create, Escalate, Acknowledge, Close, Update, and SLA Breach events to control lights, scenes, scripts
@@ -61,11 +61,15 @@ JSM alert created / escalated
 - **JSM incident sync** — optional background task to poll JSM for open alerts and keep the incident dashboard current
 - **Emoji toggle** — `ENABLE_EMOJIS=false` strips all emojis from notifications, metadata, and incoming alert text
 - **Generic webhook support** — any system that sends HTTP POST (Grafana, Uptime Kuma, shell scripts, HA automations) can trigger HA alerts
-- **API key authentication** — optional `?key=` query parameter for webhook URL authorization
+- **API key authentication** — optional API key via query parameter (`?key=`), HTTP header (`X-API-Key`), or URL path prefix (`/KEY/endpoint`)
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
 - **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
 - **Safe format templates** — user-configurable announcement formats use a restricted formatter that blocks attribute/index access
-- **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`
+- **Prometheus metrics** — `GET /metrics` exposes alert counters, credential check stats, rate limit hits, and uptime for Grafana/Prometheus dashboards
+- **Structured JSON logging** — `LOG_FORMAT=json` for Datadog, Loki, CloudWatch, ELK; default is human-readable text
+- **Hot config reload** — `POST /reload` re-reads `.env` and applies changes without container restart
+- **Per-IP rate limiting** — 60 requests/minute on `/alert` to prevent webhook abuse
+- **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`, localhost-only port binding
 
 ---
 
@@ -195,30 +199,22 @@ You should see your schedules listed and an `on_call` field.  If a schedule show
 
 JSM's servers need to reach your webhook URL over the internet.
 
-### Option 1 — Port-forward on your router
+> **WARNING: Do not expose this container directly to the internet.**
+> The service runs plain HTTP without TLS.  All traffic — including API keys,
+> webhook payloads, and authentication tokens — is transmitted in cleartext.
+> Always place a TLS-terminating proxy or tunnel in front of the service.
+> Direct internet exposure risks credential interception, replay attacks,
+> and unauthorized access to your Home Assistant instance.
 
-Forward external TCP port 8080 (or 443 via a reverse proxy) to your server's LAN IP.
+### Option 1 — Cloudflare Tunnel (recommended — no open ports)
 
-### Option 2 — Cloudflare Tunnel (recommended — no open ports)
+A Cloudflare Tunnel creates an encrypted outbound connection from your network to Cloudflare's edge, with no inbound ports to open on your router or firewall.  Cloudflare handles TLS termination and DDoS protection automatically.
 
-```bash
-# Using the cloudflared Docker image
-docker run -d --name cloudflared \
-  cloudflare/cloudflared:latest tunnel \
-  --url http://host.docker.internal:8080
-```
+For setup instructions, see the [Cloudflare Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
 
-Or install `cloudflared` on the host and run:
+### Option 2 — Reverse proxy with TLS (NGINX / Traefik / Caddy)
 
-```bash
-cloudflared tunnel --url http://localhost:8080
-```
-
-Cloudflare will print a `trycloudflare.com` URL you can use immediately, or you can configure a permanent named tunnel with your own domain.
-
-### Option 3 — Reverse proxy (NGINX / Traefik / Caddy)
-
-Add a location block pointing to `http://localhost:8080`.  Use TLS termination at the proxy.
+Run a TLS-terminating reverse proxy on the same host and forward traffic to `http://127.0.0.1:8080`.  Detailed reverse proxy configuration is outside the scope of this README — consult your proxy's documentation for TLS certificate setup (e.g. Let's Encrypt via Certbot or Caddy's automatic HTTPS).
 
 ---
 
@@ -254,16 +250,17 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 
 ### Optional — API Key Authentication (recommended)
 
-The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and include the key in your JSM webhook URLs:
+The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and pass the key using **any** of these methods:
 
-```
-https://your-host/alert?key=YOUR_API_KEY
-https://your-host/alert?mode=always&key=YOUR_API_KEY
-```
+| Method | Example | Best for |
+|---|---|---|
+| Query parameter | `https://your-host/alert?key=YOUR_KEY` | JSM webhooks (URL-only config) |
+| Path prefix | `https://your-host/YOUR_KEY/alert` | Tools that can't add headers or query params |
+| HTTP header | `X-API-Key: YOUR_KEY` | Scripts, HA automations, Grafana |
 
-Generate a key: `openssl rand -hex 32`
+All three methods work on every authenticated endpoint.  Generate a key: `openssl rand -hex 32`
 
-Requests without a valid `?key=` parameter receive a 401 Unauthorized.
+Requests without a valid key receive a 401 Unauthorized.
 
 ### Optional — HMAC Webhook Signature
 
@@ -1093,7 +1090,55 @@ Returns `{"status": "ok"}`.  Used by Docker health-check and external monitors.
 
 ### `GET /healthz`
 
-Deep health check — verifies JSM API credentials and HA API connectivity.  Returns 200 with `{"healthy": true, ...}` if both pass, or 503 if either fails.  Use this for readiness probes or monitoring dashboards.
+Deep health check — verifies JSM and HA connectivity, validates configured schedules, and reports operational state.  Returns 200 if core checks pass, 503 if any fail.  Gated by API key (query param, header, or path prefix) when `WEBHOOK_API_KEY` is set.
+
+```json
+{
+  "healthy": true,
+  "timestamp": "2026-03-25T14:32:01+00:00",
+  "started_at": "2026-03-25T14:00:00+00:00",
+  "uptime_seconds": 1921.0,
+  "version": "2.0.0",
+  "checks": { "jsm_api": "ok", "ha_api": "ok" },
+  "schedules": {
+    "check_oncall": {
+      "Cloud Engineering On-Call Schedule": {
+        "schedule_id": "abc-123",
+        "exists_in_jsm": true,
+        "on_call": true
+      }
+    },
+    "always_notify": ["Internal Systems_schedule"]
+  },
+  "cache": {
+    "schedule_id_entries": 2,
+    "oncall_entries": 1,
+    "dedup_entries": 0
+  },
+  "background_tasks": {
+    "batch_queue_size": 0,
+    "active_tts_repeats": 0,
+    "tts_repeat_alert_ids": []
+  },
+  "incident_dashboard": { "enabled": false },
+  "configuration": {
+    "oncall_cache_ttl_seconds": 300,
+    "alert_dedup_ttl_seconds": 60,
+    "token_check_interval_hours": 24,
+    "alert_batch_window_seconds": 0,
+    "tts_repeat_interval_seconds": 0,
+    "tts_repeat_max": 5,
+    "tts_repeat_priorities": "P1",
+    "silent_window": "(none)",
+    "terse_window": "(none)",
+    "webhook_secret_configured": true,
+    "webhook_api_key_configured": true,
+    "emojis_enabled": true
+  }
+}
+```
+
+No tokens, secrets, URLs, or user IDs are included in the response.
 
 ### `GET /status`
 
@@ -1101,7 +1146,6 @@ Returns current on-call status for all watched schedules (forces a fresh JSM API
 
 ```json
 {
-  "user_id": "your-account-id",
   "on_call_schedules": {
     "Your On-Call Schedule": {
       "schedule_id": "abc-123",
@@ -1111,6 +1155,28 @@ Returns current on-call status for all watched schedules (forces a fresh JSM API
   "always_notify_schedules": ["Your Always-Notify Schedule"]
 }
 ```
+
+### `GET /metrics`
+
+Prometheus-compatible metrics in text exposition format.  Gated by API key when configured.
+
+```
+jsm_notifier_alerts_received_total 42
+jsm_notifier_alerts_notified_total 38
+jsm_notifier_alerts_deduplicated_total 3
+jsm_notifier_alerts_dismissed_total 12
+jsm_notifier_alerts_rate_limited_total 0
+jsm_notifier_credential_checks_total 7
+jsm_notifier_credential_checks_failed_total 0
+jsm_notifier_healthz_requests_total 15
+jsm_notifier_uptime_seconds 86412.3
+```
+
+### `POST /reload`
+
+Re-reads `.env` and applies configuration changes without restarting the container.  Clears all caches (schedule ID, on-call, dedup) on reload.  Gated by API key when configured.
+
+Returns `{"status": "reloaded"}` on success, 500 if the new config is invalid (previous config remains active).
 
 ### `POST /cache/invalidate`
 
@@ -1192,13 +1258,15 @@ uvicorn src.main:app --reload --port 8080
 
 ### "Schedule not found" error
 
-The service logs all available schedule names when a lookup fails:
+Schedule names in `.env` must match JSM exactly (case-sensitive).  List your schedules:
 
 ```bash
-docker compose logs jsm-ha-notifier | grep "Available schedules"
+curl -s -u "you@yourcompany.com:YOUR_API_TOKEN" \
+  "https://api.atlassian.com/jsm/ops/api/YOUR_CLOUD_ID/v1/schedules" \
+  | python3 -m json.tool | grep '"name"'
 ```
 
-Copy the exact name (case-sensitive) from the output into `.env` and restart.
+Copy the exact name into `.env` and restart.
 
 ### No audio / TTS not playing
 
@@ -1226,6 +1294,19 @@ The on-call cache may be stale.  Force a refresh:
 curl -X POST http://localhost:8080/cache/invalidate
 ```
 
+### Getting 404 on endpoints that should exist
+
+When `WEBHOOK_API_KEY` is set, endpoints return **404 Not Found** (not 401) if the API key is missing or wrong.  This is intentional — it prevents attackers from discovering that authenticated endpoints exist.  If you're getting unexpected 404s:
+
+1. Confirm `WEBHOOK_API_KEY` is set in your `.env`
+2. Confirm your request includes the key via one of:
+   - Query parameter: `?key=YOUR_KEY`
+   - Path prefix: `/YOUR_KEY/endpoint`
+   - HTTP header: `X-API-Key: YOUR_KEY`
+3. Verify the key value matches exactly (no extra whitespace)
+
+The `/health` and `/robots.txt` endpoints are always unauthenticated.
+
 ### Invalid webhook signature
 
 Confirm that the `WEBHOOK_SECRET` in `.env` matches the secret configured in JSM exactly.  Remember: the HMAC is computed over the **raw request body**, not the parsed JSON.
@@ -1244,6 +1325,54 @@ The service checks token validity every `TOKEN_CHECK_INTERVAL_HOURS` hours (defa
 3. Restart the container: `docker compose restart`
 
 The persistent HA notification will be dismissed automatically on the next successful token check (within 30 seconds of startup).
+
+**Quiet hours:** If the credential check fails during a `SILENT_WINDOW`, the TTS announcement is suppressed — only the persistent dashboard notification is created.  This prevents the service from waking you up at night for a non-urgent token issue that can wait until morning.
+
+---
+
+## Production Recommendations
+
+### External uptime monitoring
+
+The service is designed to wake you up — but nothing wakes you up if the service itself is down.  Configure an external uptime monitor to poll `GET /health` and alert you if it stops responding.
+
+**NodePing** (recommended):
+1. Create a new HTTP check
+2. URL: `https://your-host/health` (or your Cloudflare Tunnel URL)
+3. Expected status: `200`
+4. Expected body contains: `"ok"`
+5. Check interval: 1 minute
+6. Notification contacts: your email, SMS, or PagerDuty
+
+Other options: [Uptime Kuma](https://github.com/louislam/uptime-kuma) (self-hosted), UptimeRobot, Pingdom, or Cloudflare Health Checks.
+
+The `/health` endpoint is always unauthenticated and has no external dependencies — it returns `{"status": "ok"}` as long as the process is alive.
+
+### Single-worker resilience
+
+The service runs a single uvicorn worker.  This is sufficient for typical JSM webhook volume (a few alerts per hour), but be aware:
+
+- If the process crashes, Docker's `restart: unless-stopped` will restart it automatically, but alerts arriving during the ~5s restart window will be lost (JSM retries, so they'll typically arrive again)
+- If the event loop blocks on a slow JSM/HA API call, other webhooks queue behind it — the async architecture mitigates this, but a truly hung connection could stall processing
+
+For higher availability, run the service on a host with reliable uptime and use the external uptime monitor above to detect outages quickly.
+
+### Persistent incident storage
+
+By default, the incident database uses `/tmp/incidents.db` which is lost on container restart (tmpfs).  For production use, mount a Docker volume:
+
+```yaml
+# docker-compose.yml
+services:
+  jsm-ha-notifier:
+    volumes:
+      - ./data:/data
+```
+
+```bash
+# .env
+INCIDENT_DB_PATH=/data/incidents.db
+```
 
 ---
 

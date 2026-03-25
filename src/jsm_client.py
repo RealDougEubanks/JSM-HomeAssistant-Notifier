@@ -64,6 +64,9 @@ class JSMClient:
 
     # ── Public API ────────────────────────────────────────────────────────
 
+    # Safety cap: maximum number of pagination pages to follow.
+    _MAX_PAGES = 100
+
     async def get_all_schedules(self) -> list[dict[str, Any]]:
         """
         Return all schedules visible to the configured API token.
@@ -71,8 +74,12 @@ class JSMClient:
         """
         url: str | None = self._schedules_url()
         schedules: list[dict[str, Any]] = []
+        expected_prefix = f"{self.api_url}/"
 
-        while url:
+        for _ in range(self._MAX_PAGES):
+            if not url:
+                break
+
             response = await self._http.get(
                 url,
                 auth=self._auth,
@@ -85,9 +92,25 @@ class JSMClient:
             page = data.get("values") or []
             schedules.extend(page)
 
-            # JSM paginates via a "next" cursor parameter
+            # JSM paginates via a "next" cursor URL.
+            # Validate it starts with our API base to prevent credential
+            # redirection via a malicious or compromised response.
             next_cursor = data.get("paging", {}).get("next")
-            url = next_cursor if next_cursor else None
+            if next_cursor and next_cursor.startswith(expected_prefix):
+                url = next_cursor
+            else:
+                if next_cursor:
+                    logger.warning(
+                        "Ignoring suspicious pagination URL: %s",
+                        next_cursor[:200],
+                    )
+                url = None
+        else:
+            logger.warning(
+                "Pagination safety cap reached (%d pages); "
+                "some schedules may not be loaded.",
+                self._MAX_PAGES,
+            )
 
         logger.debug("Fetched %d schedules from JSM", len(schedules))
         return schedules
@@ -116,9 +139,9 @@ class JSMClient:
         found = self._schedule_id_cache.get(schedule_name)
         if not found:
             logger.warning(
-                "Schedule '%s' not found in JSM. " "Available schedules: %s",
+                "Schedule '%s' not found in JSM (%d schedule(s) visible).",
                 schedule_name,
-                list(self._schedule_id_cache.keys()),
+                len(self._schedule_id_cache),
             )
         return found
 
@@ -294,3 +317,10 @@ class JSMClient:
         """Force the next on-call check to hit the API (useful after rotation)."""
         self._oncall_cache.clear()
         logger.info("On-call cache invalidated")
+
+    def cache_stats(self) -> dict[str, int]:
+        """Return cache sizes for operational visibility (no values leaked)."""
+        return {
+            "schedule_id_entries": len(self._schedule_id_cache),
+            "oncall_entries": len(self._oncall_cache),
+        }

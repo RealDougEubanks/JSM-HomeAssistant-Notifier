@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] — 2026-03-25
+
+### Added
+
+#### Health Check & Observability
+- **Enriched `/healthz` endpoint** — now returns schedule validation (verifies `.env` schedule names exist in JSM), on-call status, uptime, version, cache sizes, background task state, and non-sensitive configuration summary.
+- **Prometheus `/metrics` endpoint** — counters for alerts received/notified/deduplicated/dismissed, credential checks, rate limiting, and uptime gauge. Compatible with Prometheus scraping and Grafana dashboards.
+- **Structured JSON logging** (`LOG_FORMAT=json`) — optional JSON log output for Datadog, Loki, CloudWatch, and ELK. Set `LOG_FORMAT=json` in `.env`; default remains human-readable text.
+- **Quiet-hours TTS suppression for credential checks** — the 24-hour token health check suppresses TTS during `SILENT_WINDOW` hours but still creates a persistent dashboard notification.
+
+#### Configuration & Operations
+- **Hot config reload** (`POST /reload`) — re-reads `.env` and applies changes without restarting the container. Clears all caches on reload.
+- **Timezone support** (`TZ`) — documented in `.env.example`. Time windows are evaluated in the container's local timezone.
+
+#### API Key Authentication
+- **Three authentication methods** — API key can now be passed via query parameter (`?key=`), HTTP header (`X-API-Key`), or URL path prefix (`/KEY/endpoint`). All methods work on all authenticated endpoints.
+- **Stealth 404 on auth failure** — unauthenticated requests return 404 (not 401) to prevent endpoint discovery.
+
+#### Security Hardening
+- **HTTPS enforcement** — `JSM_API_URL` and `HA_URL` must use HTTPS (validated at startup).
+- **SQLite thread-safety** — added `threading.Lock` to prevent concurrent write corruption.
+- **Pagination SSRF protection** — JSM `paging.next` URL validated against expected API base; capped at 100 pages.
+- **Per-IP rate limiting** — 60 requests/minute on `/alert` with bounded IP tracking (10k max IPs).
+- **Content-Length pre-check** — rejects oversized requests before reading body into memory.
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `X-Robots-Tag`, `Content-Security-Policy`, `Referrer-Policy`, `Cache-Control: no-store`, generic `Server` header.
+- **Anti-fingerprinting** — `/openapi.json`, `/docs`, `/redoc` disabled; normalized 404/405/422 error responses; `robots.txt` endpoint.
+- **Endpoint authentication** — `/status`, `/cache/invalidate`, and all incident dashboard endpoints now require API key when configured.
+- **Alert ID validation** — added to `/incidents/{id}` and `/incidents/{id}/close` endpoints.
+- **Error detail sanitization** — JSM error messages no longer leaked in 502 responses or credential alert notifications.
+- **Schedule name redaction** — log warnings show count of visible schedules instead of names.
+- **Docker port binding** — defaults to `127.0.0.1:8080` (localhost only).
+
+#### Documentation
+- **Production recommendations** — external uptime monitoring (NodePing example), single-worker resilience notes, persistent storage setup.
+- **External access rewrite** — removed direct port-forward option; Cloudflare Tunnel as primary recommendation with TLS warning.
+- **Troubleshooting** — added 404 auth behavior section; updated schedule-not-found guidance.
+- **Local Docker build testing** — added to README with `--no-cache` cache invalidation tip.
+- **Cloud ID discovery** — updated to use simpler `_edge/tenant_info` endpoint.
+
+#### Testing
+- **90% code coverage** — 269 tests covering security (HMAC signatures, API key all methods, parametrized 404 checks on all endpoints), batch/repeat logic, HA client, and alert processor.
+
+### Changed
+- Removed unused `jira_base_url` configuration field.
+- `/status` endpoint no longer exposes `user_id` field.
+- `pip-audit` in CI scoped to `requirements.txt` only (prevents false positives from dev dependencies).
+
+---
+
 ## [2.1.0] — 2026-03-22
 
 ### Added

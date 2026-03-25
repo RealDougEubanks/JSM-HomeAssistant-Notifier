@@ -464,11 +464,17 @@ class HAClient:
         }
         return await self._call_service("media_player", "play_media", payload)
 
-    async def send_credential_alert(self, error_detail: str = "") -> None:
+    async def send_credential_alert(
+        self, error_detail: str = "", *, suppress_tts: bool = False
+    ) -> None:
         """
         Fire a TTS announcement and a persistent HA notification when the
         Atlassian API token is invalid or has expired.  Both calls are attempted
         regardless of whether the first one fails.
+
+        If *suppress_tts* is True, the TTS announcement is skipped (e.g. during
+        silent/quiet hours) but the persistent notification is still created so
+        the user sees it on the dashboard.
         """
         tts_text = (
             "Warning! The Atlassian API token used by your JSM alert notifier "
@@ -477,14 +483,18 @@ class HAClient:
         )
         notif_message = (
             "The `JSM_API_TOKEN` in your `.env` file is invalid or has been revoked.\n\n"
-            f"**Error:** {error_detail}\n\n"
+            f"**Error:** {_sanitize(error_detail)}\n\n"
             "**Action required:** Create a new token at "
             "https://id.atlassian.com/manage-profile/security/api-tokens "
             "and update `JSM_API_TOKEN` in `.env`, then run `docker compose restart`."
         )
 
-        # Fire both — don't let a TTS failure block the dashboard notification.
-        tts_ok = await self.play_tts_message(tts_text)
+        tts_ok: bool | str
+        if suppress_tts:
+            tts_ok = "suppressed (quiet hours)"
+        else:
+            tts_ok = await self.play_tts_message(tts_text)
+
         notif_ok = await self._call_service(
             "persistent_notification",
             "create",

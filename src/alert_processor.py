@@ -269,6 +269,18 @@ class AlertProcessor:
             task.cancel()
             logger.info("Cancelled TTS repeat for alert %s", alert_id)
 
+    def operational_stats(self) -> dict[str, Any]:
+        """Return bounded operational counters for the health check endpoint."""
+        # Cap list output to prevent unbounded response sizes.
+        _MAX_ALERT_IDS = 50
+        repeat_ids = list(self._repeat_tasks.keys())[:_MAX_ALERT_IDS]
+        return {
+            "dedup_cache_size": len(self._dedup_cache),
+            "batch_queue_size": len(self._batch_queue),
+            "active_tts_repeats": len(self._repeat_tasks),
+            "tts_repeat_alert_ids": repeat_ids,
+        }
+
     # ── Alert batching ───────────────────────────────────────────────────
 
     async def _flush_batch(self) -> None:
