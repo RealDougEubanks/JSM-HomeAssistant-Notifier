@@ -30,7 +30,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json as _json
 import logging
+import os
 import re
 import secrets
 import sys
@@ -52,6 +54,26 @@ from .time_windows import in_any_window
 # Maximum allowed request body size (1 MB).  JSM webhook payloads are typically
 # a few KB; anything larger is likely malicious or malformed.
 _MAX_BODY_BYTES = 1_048_576
+
+# ── Prometheus-compatible metrics (no external dependency) ───────────────────
+
+_metrics: dict[str, int] = {
+    "alerts_received_total": 0,
+    "alerts_notified_total": 0,
+    "alerts_deduplicated_total": 0,
+    "alerts_dismissed_total": 0,
+    "alerts_rate_limited_total": 0,
+    "credential_checks_total": 0,
+    "credential_checks_failed_total": 0,
+    "healthz_requests_total": 0,
+}
+
+
+def _inc(metric: str, amount: int = 1) -> None:
+    """Increment a metric counter. No-op if metric name is unknown."""
+    if metric in _metrics:
+        _metrics[metric] += amount
+
 
 # ── Simple rate limiter (token bucket, per-IP) ──────────────────────────────
 
@@ -84,12 +106,37 @@ def _rate_limited(client_ip: str) -> bool:
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+class _JsonFormatter(logging.Formatter):
+    """Emit each log record as a single JSON line for log aggregators."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            entry["exception"] = self.formatException(record.exc_info)
+        return _json.dumps(entry, default=str)
+
+
+# LOG_FORMAT is read from env directly because logging must be configured
+# before Settings() is constructed (Settings logs during init).
+_log_format = os.environ.get("LOG_FORMAT", "text").lower()
+
+if _log_format == "json":
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(_JsonFormatter())
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.INFO)
+else:
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -184,6 +231,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         await asyncio.sleep(30)
 
         while True:
+            _inc("credential_checks_total")
             logger.info("Running scheduled Atlassian credential check…")
             is_valid, error = await jsm_client.verify_credentials()
             if is_valid:
@@ -192,6 +240,7 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
                 # the dashboard doesn't show a stale warning after a rotation.
                 await ha_client.dismiss_credential_alert()
             else:
+                _inc("credential_checks_failed_total")
                 from datetime import datetime
 
                 now_time = datetime.now().time()  # noqa: DTZ005
@@ -453,6 +502,26 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/metrics", tags=["ops"], dependencies=[Depends(_require_api_key)])
+async def prometheus_metrics():
+    """
+    Prometheus-compatible metrics in text exposition format.
+
+    Returns counters for alert processing, credential checks, and rate limiting.
+    Gated by API key when configured.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    lines = []
+    for name, value in _metrics.items():
+        lines.append(f"# TYPE jsm_notifier_{name} counter")
+        lines.append(f"jsm_notifier_{name} {value}")
+    uptime = round(_time.monotonic() - _STARTUP_MONOTONIC, 1)
+    lines.append("# TYPE jsm_notifier_uptime_seconds gauge")
+    lines.append(f"jsm_notifier_uptime_seconds {uptime}")
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain")
+
+
 @app.get("/healthz", tags=["ops"], dependencies=[Depends(_require_api_key)])
 async def deep_health_check():
     """
@@ -462,6 +531,7 @@ async def deep_health_check():
     Returns 200 if core checks pass, 503 if any fail.  Gated by API key
     (query param, header, or path prefix) when ``WEBHOOK_API_KEY`` is set.
     """
+    _inc("healthz_requests_total")
 
     # ── Core connectivity checks (run in parallel) ────────────────────
     jsm_coro = _processor.jsm_client.verify_credentials()
@@ -587,6 +657,67 @@ async def on_call_status():
         "on_call_schedules": status,
         "always_notify_schedules": _settings.always_notify_schedule_names,
     }
+
+
+_last_reload: float = 0.0
+_RELOAD_COOLDOWN = 10.0  # minimum seconds between reloads
+
+
+@app.post("/reload", tags=["ops"], dependencies=[Depends(_require_api_key)])
+async def reload_config():
+    """
+    Reload configuration from .env without restarting the container.
+
+    Re-reads the .env file and applies changes to schedule routing, time
+    windows, announcement formats, tuning parameters, and webhook config.
+    Credentials (tokens, API keys) are also reloaded.
+
+    Clears all caches (schedule ID, on-call, dedup) to ensure the new
+    config takes effect immediately.  Rate-limited to once per 10 seconds.
+    """
+    global _settings, _last_reload  # noqa: PLW0603
+
+    # Cooldown to prevent DoS via rapid reloads.
+    now = _time.monotonic()
+    if now - _last_reload < _RELOAD_COOLDOWN:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Reload cooldown — retry after {_RELOAD_COOLDOWN:.0f}s",
+        )
+
+    try:
+        new_settings = Settings()
+
+        # Log security-relevant changes (without revealing values).
+        old_key_set = bool(_settings.webhook_api_key)
+        new_key_set = bool(new_settings.webhook_api_key)
+        if old_key_set != new_key_set:
+            logger.warning(
+                "Reload: WEBHOOK_API_KEY %s",
+                "enabled" if new_key_set else "DISABLED",
+            )
+
+        # Apply atomically: update processor and caches first, then swap
+        # the global _settings reference last (Python GIL makes the final
+        # reference assignment atomic for concurrent readers).
+        _processor.settings = new_settings
+        _processor.jsm_client.invalidate_oncall_cache()
+        _processor.jsm_client._schedule_id_cache.clear()
+        _processor._dedup_cache.clear()
+        _settings = new_settings
+        _last_reload = now
+
+        logger.info(
+            "Configuration reloaded — always_notify=%s  check_oncall=%s",
+            new_settings.always_notify_schedule_names,
+            new_settings.check_oncall_schedule_names,
+        )
+        return {"status": "reloaded"}
+    except Exception as exc:
+        logger.error("Configuration reload failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=500, detail="Reload failed — previous config is still active"
+        ) from exc
 
 
 @app.post("/cache/invalidate", tags=["ops"], dependencies=[Depends(_require_api_key)])
@@ -763,6 +894,7 @@ async def receive_alert(
 
     client_ip = request.client.host if request.client else "unknown"
     if _rate_limited(client_ip):
+        _inc("alerts_rate_limited_total")
         logger.warning("Rate limit exceeded for %s", client_ip)
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
@@ -811,5 +943,12 @@ async def receive_alert(
         "always" if always_notify else "oncall-check",
     )
 
+    _inc("alerts_received_total")
     result = await _processor.process(payload, always_notify=always_notify)
+    if result.get("notified"):
+        _inc("alerts_notified_total")
+    if result.get("dismissed"):
+        _inc("alerts_dismissed_total")
+    if result.get("reason") == "duplicate":
+        _inc("alerts_deduplicated_total")
     return JSONResponse(content=result)

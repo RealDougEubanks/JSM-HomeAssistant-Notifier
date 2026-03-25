@@ -65,7 +65,11 @@ JSM alert created / escalated
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
 - **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
 - **Safe format templates** — user-configurable announcement formats use a restricted formatter that blocks attribute/index access
-- **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`
+- **Prometheus metrics** — `GET /metrics` exposes alert counters, credential check stats, rate limit hits, and uptime for Grafana/Prometheus dashboards
+- **Structured JSON logging** — `LOG_FORMAT=json` for Datadog, Loki, CloudWatch, ELK; default is human-readable text
+- **Hot config reload** — `POST /reload` re-reads `.env` and applies changes without container restart
+- **Per-IP rate limiting** — 60 requests/minute on `/alert` to prevent webhook abuse
+- **Secure container** — non-root user, read-only filesystem, tmpfs at `/tmp`, localhost-only port binding
 
 ---
 
@@ -1152,6 +1156,28 @@ Returns current on-call status for all watched schedules (forces a fresh JSM API
 }
 ```
 
+### `GET /metrics`
+
+Prometheus-compatible metrics in text exposition format.  Gated by API key when configured.
+
+```
+jsm_notifier_alerts_received_total 42
+jsm_notifier_alerts_notified_total 38
+jsm_notifier_alerts_deduplicated_total 3
+jsm_notifier_alerts_dismissed_total 12
+jsm_notifier_alerts_rate_limited_total 0
+jsm_notifier_credential_checks_total 7
+jsm_notifier_credential_checks_failed_total 0
+jsm_notifier_healthz_requests_total 15
+jsm_notifier_uptime_seconds 86412.3
+```
+
+### `POST /reload`
+
+Re-reads `.env` and applies configuration changes without restarting the container.  Clears all caches (schedule ID, on-call, dedup) on reload.  Gated by API key when configured.
+
+Returns `{"status": "reloaded"}` on success, 500 if the new config is invalid (previous config remains active).
+
 ### `POST /cache/invalidate`
 
 Clears the cached on-call status so the next alert forces a fresh JSM API check.  Useful immediately after a rotation hand-off.
@@ -1301,6 +1327,52 @@ The service checks token validity every `TOKEN_CHECK_INTERVAL_HOURS` hours (defa
 The persistent HA notification will be dismissed automatically on the next successful token check (within 30 seconds of startup).
 
 **Quiet hours:** If the credential check fails during a `SILENT_WINDOW`, the TTS announcement is suppressed — only the persistent dashboard notification is created.  This prevents the service from waking you up at night for a non-urgent token issue that can wait until morning.
+
+---
+
+## Production Recommendations
+
+### External uptime monitoring
+
+The service is designed to wake you up — but nothing wakes you up if the service itself is down.  Configure an external uptime monitor to poll `GET /health` and alert you if it stops responding.
+
+**NodePing** (recommended):
+1. Create a new HTTP check
+2. URL: `https://your-host/health` (or your Cloudflare Tunnel URL)
+3. Expected status: `200`
+4. Expected body contains: `"ok"`
+5. Check interval: 1 minute
+6. Notification contacts: your email, SMS, or PagerDuty
+
+Other options: [Uptime Kuma](https://github.com/louislam/uptime-kuma) (self-hosted), UptimeRobot, Pingdom, or Cloudflare Health Checks.
+
+The `/health` endpoint is always unauthenticated and has no external dependencies — it returns `{"status": "ok"}` as long as the process is alive.
+
+### Single-worker resilience
+
+The service runs a single uvicorn worker.  This is sufficient for typical JSM webhook volume (a few alerts per hour), but be aware:
+
+- If the process crashes, Docker's `restart: unless-stopped` will restart it automatically, but alerts arriving during the ~5s restart window will be lost (JSM retries, so they'll typically arrive again)
+- If the event loop blocks on a slow JSM/HA API call, other webhooks queue behind it — the async architecture mitigates this, but a truly hung connection could stall processing
+
+For higher availability, run the service on a host with reliable uptime and use the external uptime monitor above to detect outages quickly.
+
+### Persistent incident storage
+
+By default, the incident database uses `/tmp/incidents.db` which is lost on container restart (tmpfs).  For production use, mount a Docker volume:
+
+```yaml
+# docker-compose.yml
+services:
+  jsm-ha-notifier:
+    volumes:
+      - ./data:/data
+```
+
+```bash
+# .env
+INCIDENT_DB_PATH=/data/incidents.db
+```
 
 ---
 

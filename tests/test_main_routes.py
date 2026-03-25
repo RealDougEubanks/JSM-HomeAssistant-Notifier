@@ -378,3 +378,43 @@ async def test_status_endpoint(client):
         assert resp.status_code == 200
         data = resp.json()
         assert "user_id" not in data
+
+
+# ── Metrics endpoint ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint(client):
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "jsm_notifier_alerts_received_total" in body
+    assert "jsm_notifier_uptime_seconds" in body
+    assert resp.headers["content-type"].startswith("text/plain")
+
+
+# ── Reload endpoint ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reload_success(client):
+    resp = await client.post("/reload")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "reloaded"
+
+
+@pytest.mark.asyncio
+async def test_reload_requires_api_key(client):
+    import src.main as main_mod
+
+    main_mod._settings = main_mod._settings.model_copy(
+        update={"webhook_api_key": "reloadkey"}
+    )
+    try:
+        resp = await client.post("/reload")
+        assert resp.status_code == 404  # 404 stealth when no key
+
+        resp = await client.post("/reload?key=reloadkey")
+        assert resp.status_code == 200
+    finally:
+        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})

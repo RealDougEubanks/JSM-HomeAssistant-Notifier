@@ -189,6 +189,11 @@ class Settings(BaseSettings):
     # Which priorities trigger repeats.  Comma-separated, e.g. "P1" or "P1,P2".
     tts_repeat_priorities: str = "P1"
 
+    # ── Logging ────────────────────────────────────────────────────────────
+    # "text" for human-readable (default), "json" for structured logging
+    # suitable for log aggregators (Datadog, Loki, CloudWatch, ELK).
+    log_format: str = "text"
+
     # ── Tuning ───────────────────────────────────────────────────────────────
     oncall_cache_ttl_seconds: int = 300
     alert_dedup_ttl_seconds: int = 60
