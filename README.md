@@ -98,6 +98,28 @@ curl http://localhost:8080/health
 # {"status":"ok"}
 ```
 
+### Local build testing
+
+To build the Docker image locally instead of pulling from GHCR:
+
+```bash
+docker build -t ghcr.io/dougeubanks/jsm-ha-notifier:latest .
+docker compose up -d
+docker compose logs -f
+```
+
+This tags the local build with the same image name the compose file expects.
+
+If you've made code changes and Docker serves a cached layer, force a clean rebuild:
+
+```bash
+docker build --no-cache -t ghcr.io/dougeubanks/jsm-ha-notifier:latest .
+docker compose up -d
+docker compose logs -f
+```
+
+Note: `.env` changes do **not** require a rebuild — just restart the container with `docker compose up -d`.
+
 ---
 
 ## Configuration
@@ -116,11 +138,11 @@ Your Cloud ID is a UUID that identifies your Atlassian organisation.  Retrieve i
 
 ```bash
 curl -s -u "you@yourcompany.com:YOUR_API_TOKEN" \
-  https://api.atlassian.com/oauth/token/accessible-resources \
+  https://your-org.atlassian.net/_edge/tenant_info \
   | python3 -m json.tool
 ```
 
-Look for the `"id"` field next to your org name.  Copy it into `JSM_CLOUD_ID`.
+Look for the `"cloudId"` field.  Copy it into `JSM_CLOUD_ID`.
 
 ### Step 3 — Find your Atlassian Account ID
 

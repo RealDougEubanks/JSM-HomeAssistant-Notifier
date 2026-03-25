@@ -33,7 +33,6 @@ class JSMClient:
         username: str,
         api_token: str,
         my_user_id: str,
-        jira_base_url: str = "",  # reserved for future use; not currently needed
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.cloud_id = cloud_id
@@ -180,10 +179,7 @@ class JSMClient:
 
         This is the same endpoint used for normal schedule lookups, so if it
         returns 200 we know the token has exactly the permissions this service
-        needs.  Using the JSM Ops API (api.atlassian.com) rather than the Jira
-        REST API (atlassian.net) avoids SSO / IP-restriction issues that can
-        block basic-auth on the Jira product tier even when the token itself is
-        valid.
+        needs.
 
         Returns (True, "") on success, or (False, error_detail) on failure.
         """

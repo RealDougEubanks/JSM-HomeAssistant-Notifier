@@ -53,7 +53,7 @@ jobs:
       - name: Scan Python dependencies for vulnerabilities
         run: |
           pip install pip-audit
-          pip-audit --desc
+          pip-audit -r requirements.txt --desc
 
       - name: Security scan with bandit
         run: |
