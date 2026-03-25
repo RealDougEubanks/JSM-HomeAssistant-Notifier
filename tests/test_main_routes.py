@@ -14,7 +14,7 @@ _ENV = {
     "JSM_USERNAME": "u@e.com",
     "JSM_API_TOKEN": "tok",
     "JSM_MY_USER_ID": "uid",
-    "HA_URL": "http://ha.local:8123",
+    "HA_URL": "https://ha.local:8123",
     "HA_TOKEN": "ha-tok",
     "WEBHOOK_SECRET": "",
     "WEBHOOK_API_KEY": "",

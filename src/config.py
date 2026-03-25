@@ -228,6 +228,16 @@ class Settings(BaseSettings):
     # ── Validators ───────────────────────────────────────────────────────────
     # These run when values arrive via __init__ kwargs (e.g. in tests).
     # The custom sources above handle the same conversion for .env / env vars.
+    @field_validator("jsm_api_url", "ha_url", mode="after")
+    @classmethod
+    def _validate_urls(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError(
+                f"URL must use HTTPS for security: {v!r}. "
+                "Set the URL to https:// to prevent credential leakage."
+            )
+        return v
+
     @field_validator(
         "always_notify_schedule_names", "check_oncall_schedule_names", mode="before"
     )

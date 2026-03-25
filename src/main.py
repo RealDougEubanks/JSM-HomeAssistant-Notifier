@@ -53,6 +53,35 @@ from .time_windows import in_any_window
 # a few KB; anything larger is likely malicious or malformed.
 _MAX_BODY_BYTES = 1_048_576
 
+# ── Simple rate limiter (token bucket, per-IP) ──────────────────────────────
+
+_RATE_LIMIT_REQUESTS = 60  # max requests per window
+_RATE_LIMIT_WINDOW = 60.0  # seconds
+_rate_buckets: dict[str, list[float]] = {}
+_MAX_TRACKED_IPS = 10_000  # prevent unbounded memory growth
+
+
+def _rate_limited(client_ip: str) -> bool:
+    """Return True if *client_ip* has exceeded the rate limit."""
+    now = _time.monotonic()
+
+    # Evict oldest half if tracking too many IPs (DoS protection).
+    if len(_rate_buckets) >= _MAX_TRACKED_IPS:
+        to_remove = sorted(_rate_buckets, key=lambda k: _rate_buckets[k][-1] if _rate_buckets[k] else 0)
+        for k in to_remove[: len(to_remove) // 2]:
+            del _rate_buckets[k]
+
+    timestamps = _rate_buckets.setdefault(client_ip, [])
+    # Prune timestamps outside the window.
+    cutoff = now - _RATE_LIMIT_WINDOW
+    _rate_buckets[client_ip] = [t for t in timestamps if t > cutoff]
+    timestamps = _rate_buckets[client_ip]
+
+    if len(timestamps) >= _RATE_LIMIT_REQUESTS:
+        return True
+    timestamps.append(now)
+    return False
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -234,6 +263,8 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         ),
         version="2.0.0",
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
     )
 
     return app, settings, processor, incident_store
@@ -292,6 +323,14 @@ def _verify_api_key(key: str | None) -> bool:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    """Prevent search engine indexing."""
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
 @app.get("/health", tags=["ops"])
@@ -415,11 +454,14 @@ async def deep_health_check(key: str | None = Query(None)):
 
 
 @app.get("/status", tags=["ops"])
-async def on_call_status():
+async def on_call_status(key: str | None = Query(None)):
     """
     Returns the current on-call status for all watched schedules.
     Useful for debugging and for verifying your JSM credentials work.
+    Gated by ``?key=`` when ``WEBHOOK_API_KEY`` is set.
     """
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     status: dict = {}
 
     for name in _settings.check_oncall_schedule_names:
@@ -439,8 +481,10 @@ async def on_call_status():
 
 
 @app.post("/cache/invalidate", tags=["ops"])
-async def invalidate_cache():
+async def invalidate_cache(key: str | None = Query(None)):
     """Force the next on-call check to query JSM instead of using cached data."""
+    if not _verify_api_key(key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     _processor.jsm_client.invalidate_oncall_cache()
     return {"status": "cache invalidated"}
 
@@ -617,7 +661,7 @@ async def acknowledge_alert(
         logger.info("Alert %s acknowledged via API from %s", alert_id, source_ip)
         return {"alert_id": alert_id, "acknowledged": True}
     logger.error("Failed to acknowledge alert %s: %s", alert_id, error)
-    raise HTTPException(status_code=502, detail=f"JSM acknowledge failed: {error}")
+    raise HTTPException(status_code=502, detail="JSM acknowledge failed")
 
 
 @app.post("/alert", tags=["webhook"])
@@ -644,6 +688,22 @@ async def receive_alert(
     """
     if not _verify_api_key(key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if _rate_limited(client_ip):
+        logger.warning("Rate limit exceeded for %s", client_ip)
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Early rejection based on Content-Length header before reading body
+    # into memory. Prevents large payloads from consuming server RAM.
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > _MAX_BODY_BYTES:
+        logger.warning(
+            "Rejecting request with Content-Length %s from %s",
+            content_length,
+            client_ip,
+        )
+        raise HTTPException(status_code=413, detail="Request body too large")
 
     body = await request.body()
 

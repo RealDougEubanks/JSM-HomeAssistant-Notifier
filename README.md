@@ -195,30 +195,22 @@ You should see your schedules listed and an `on_call` field.  If a schedule show
 
 JSM's servers need to reach your webhook URL over the internet.
 
-### Option 1 — Port-forward on your router
+> **WARNING: Do not expose this container directly to the internet.**
+> The service runs plain HTTP without TLS.  All traffic — including API keys,
+> webhook payloads, and authentication tokens — is transmitted in cleartext.
+> Always place a TLS-terminating proxy or tunnel in front of the service.
+> Direct internet exposure risks credential interception, replay attacks,
+> and unauthorized access to your Home Assistant instance.
 
-Forward external TCP port 8080 (or 443 via a reverse proxy) to your server's LAN IP.
+### Option 1 — Cloudflare Tunnel (recommended — no open ports)
 
-### Option 2 — Cloudflare Tunnel (recommended — no open ports)
+A Cloudflare Tunnel creates an encrypted outbound connection from your network to Cloudflare's edge, with no inbound ports to open on your router or firewall.  Cloudflare handles TLS termination and DDoS protection automatically.
 
-```bash
-# Using the cloudflared Docker image
-docker run -d --name cloudflared \
-  cloudflare/cloudflared:latest tunnel \
-  --url http://host.docker.internal:8080
-```
+For setup instructions, see the [Cloudflare Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
 
-Or install `cloudflared` on the host and run:
+### Option 2 — Reverse proxy with TLS (NGINX / Traefik / Caddy)
 
-```bash
-cloudflared tunnel --url http://localhost:8080
-```
-
-Cloudflare will print a `trycloudflare.com` URL you can use immediately, or you can configure a permanent named tunnel with your own domain.
-
-### Option 3 — Reverse proxy (NGINX / Traefik / Caddy)
-
-Add a location block pointing to `http://localhost:8080`.  Use TLS termination at the proxy.
+Run a TLS-terminating reverse proxy on the same host and forward traffic to `http://127.0.0.1:8080`.  Detailed reverse proxy configuration is outside the scope of this README — consult your proxy's documentation for TLS certificate setup (e.g. Let's Encrypt via Certbot or Caddy's automatic HTTPS).
 
 ---
 

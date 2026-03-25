@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -58,6 +59,7 @@ class IncidentStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -68,8 +70,12 @@ class IncidentStore:
         return self._conn
 
     async def _run(self, fn: Any, *args: Any) -> Any:
-        """Run a sync DB function in a thread."""
-        return await asyncio.to_thread(fn, *args)
+        """Run a sync DB function in a thread, serialized by _lock."""
+        return await asyncio.to_thread(self._run_locked, fn, *args)
+
+    def _run_locked(self, fn: Any, *args: Any) -> Any:
+        with self._lock:
+            return fn(*args)
 
     # ── Write operations ──────────────────────────────────────────────────
 

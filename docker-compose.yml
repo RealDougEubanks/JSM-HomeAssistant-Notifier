@@ -15,7 +15,10 @@ services:
     restart: unless-stopped
 
     ports:
-      - "8080:8080"
+      # Bind to localhost only — use a reverse proxy or tunnel for external
+      # access.  Change to "0.0.0.0:8080:8080" only if you understand the
+      # security implications (no TLS, no auth by default).
+      - "127.0.0.1:8080:8080"
 
     # All secrets live in .env — never committed to git
     env_file:
