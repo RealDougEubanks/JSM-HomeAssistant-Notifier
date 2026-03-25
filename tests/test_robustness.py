@@ -314,3 +314,30 @@ def test_strip_emojis_function():
     assert _strip_emojis("🔴 P1 Alert") == "P1 Alert"
     assert _strip_emojis("No emojis here") == "No emojis here"
     assert _strip_emojis("⬆️ ESCALATED") == "ESCALATED"
+
+
+# ── Credential alert quiet hours ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_credential_alert_suppress_tts_skips_play(ha_client):
+    """When suppress_tts=True, play_tts_message should NOT be called."""
+    ha_client.play_tts_message = AsyncMock(return_value=True)
+    ha_client._call_service = AsyncMock(return_value=True)
+
+    await ha_client.send_credential_alert("token expired", suppress_tts=True)
+
+    ha_client.play_tts_message.assert_not_called()
+    ha_client._call_service.assert_called_once()  # notification still sent
+
+
+@pytest.mark.asyncio
+async def test_credential_alert_default_plays_tts(ha_client):
+    """When suppress_tts is not set, play_tts_message should be called."""
+    ha_client.play_tts_message = AsyncMock(return_value=True)
+    ha_client._call_service = AsyncMock(return_value=True)
+
+    await ha_client.send_credential_alert("token expired")
+
+    ha_client.play_tts_message.assert_called_once()
+    ha_client._call_service.assert_called_once()

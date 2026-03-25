@@ -45,6 +45,7 @@ from .ha_client import HAClient
 from .incident_store import IncidentStore
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
+from .time_windows import in_any_window
 
 # Maximum allowed request body size (1 MB).  JSM webhook payloads are typically
 # a few KB; anything larger is likely malicious or malformed.
@@ -137,6 +138,9 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         finish booting before hitting external APIs), then repeats every
         TOKEN_CHECK_INTERVAL_HOURS hours.  Fires a HA TTS announcement and
         persistent notification if the token is invalid or revoked.
+
+        During silent/quiet hours the TTS announcement is suppressed, but the
+        persistent dashboard notification is still created so the user sees it.
         """
         interval_seconds = settings.token_check_interval_hours * 3600
         # Short initial delay so startup logs are clean.
@@ -151,8 +155,20 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
                 # the dashboard doesn't show a stale warning after a rotation.
                 await ha_client.dismiss_credential_alert()
             else:
-                logger.error("Credential check FAILED: %s — firing HA alert.", error)
-                await ha_client.send_credential_alert(error)
+                from datetime import datetime
+
+                now_time = datetime.now().time()  # noqa: DTZ005
+                quiet = in_any_window(now_time, settings._silent_windows)
+                if quiet:
+                    logger.warning(
+                        "Credential check FAILED: %s — suppressing TTS (quiet hours).",
+                        error,
+                    )
+                else:
+                    logger.error(
+                        "Credential check FAILED: %s — firing HA alert.", error
+                    )
+                await ha_client.send_credential_alert(error, suppress_tts=quiet)
 
             await asyncio.sleep(interval_seconds)
 
