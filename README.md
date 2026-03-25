@@ -61,7 +61,7 @@ JSM alert created / escalated
 - **JSM incident sync** — optional background task to poll JSM for open alerts and keep the incident dashboard current
 - **Emoji toggle** — `ENABLE_EMOJIS=false` strips all emojis from notifications, metadata, and incoming alert text
 - **Generic webhook support** — any system that sends HTTP POST (Grafana, Uptime Kuma, shell scripts, HA automations) can trigger HA alerts
-- **API key authentication** — optional `?key=` query parameter for webhook URL authorization
+- **API key authentication** — optional API key via query parameter (`?key=`), HTTP header (`X-API-Key`), or URL path prefix (`/KEY/endpoint`)
 - **Webhook signature verification** — optional HMAC-SHA256 validation via `X-Hub-Signature-256`
 - **Request body size limit** — rejects payloads over 1 MB to prevent memory exhaustion
 - **Safe format templates** — user-configurable announcement formats use a restricted formatter that blocks attribute/index access
@@ -246,16 +246,17 @@ JSM project → **Settings** → **Integrations** → **Add Integration** → ch
 
 ### Optional — API Key Authentication (recommended)
 
-The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and include the key in your JSM webhook URLs:
+The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.env` and pass the key using **any** of these methods:
 
-```
-https://your-host/alert?key=YOUR_API_KEY
-https://your-host/alert?mode=always&key=YOUR_API_KEY
-```
+| Method | Example | Best for |
+|---|---|---|
+| Query parameter | `https://your-host/alert?key=YOUR_KEY` | JSM webhooks (URL-only config) |
+| Path prefix | `https://your-host/YOUR_KEY/alert` | Tools that can't add headers or query params |
+| HTTP header | `X-API-Key: YOUR_KEY` | Scripts, HA automations, Grafana |
 
-Generate a key: `openssl rand -hex 32`
+All three methods work on every authenticated endpoint.  Generate a key: `openssl rand -hex 32`
 
-Requests without a valid `?key=` parameter receive a 401 Unauthorized.
+Requests without a valid key receive a 401 Unauthorized.
 
 ### Optional — HMAC Webhook Signature
 
@@ -1085,7 +1086,7 @@ Returns `{"status": "ok"}`.  Used by Docker health-check and external monitors.
 
 ### `GET /healthz`
 
-Deep health check — verifies JSM and HA connectivity, validates configured schedules, and reports operational state.  Returns 200 if core checks pass, 503 if any fail.  Gated by `?key=` when `WEBHOOK_API_KEY` is set.
+Deep health check — verifies JSM and HA connectivity, validates configured schedules, and reports operational state.  Returns 200 if core checks pass, 503 if any fail.  Gated by API key (query param, header, or path prefix) when `WEBHOOK_API_KEY` is set.
 
 ```json
 {

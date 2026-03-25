@@ -316,6 +316,8 @@ async def test_security_headers_present(client, app):
     assert resp.headers["X-Robots-Tag"] == "noindex, nofollow"
     assert resp.headers["Content-Security-Policy"] == "default-src 'none'"
     assert resp.headers["Referrer-Policy"] == "no-referrer"
+    assert resp.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert resp.headers["Pragma"] == "no-cache"
     assert resp.headers["Server"] == "webhook-receiver"
 
 
@@ -345,3 +347,176 @@ async def test_robots_txt(client, app):
     resp = await client.get("/robots.txt")
     assert resp.status_code == 200
     assert "Disallow: /" in resp.text
+
+
+# ── API key: all three methods ───────────────────────────────────────────────
+
+# Helper to patch /healthz dependencies for API key tests.
+def _healthz_patches():
+    return (
+        patch(
+            "src.jsm_client.JSMClient.verify_credentials",
+            new_callable=AsyncMock,
+            return_value=(True, ""),
+        ),
+        patch(
+            "src.ha_client.HAClient.verify_connectivity",
+            new_callable=AsyncMock,
+            return_value=(True, ""),
+        ),
+        patch(
+            "src.jsm_client.JSMClient.get_schedule_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_key_via_query_param(client, app):
+    """API key as ?key= query parameter should be accepted."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/healthz?key=testkey")
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_via_header(client, app):
+    """API key as X-API-Key header should be accepted."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/healthz", headers={"X-API-Key": "testkey"})
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_via_path_prefix(client, app):
+    """API key as path prefix /KEY/endpoint should be accepted."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/testkey/healthz")
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_wrong_query_param_rejected(client, app):
+    """Wrong ?key= value should be rejected."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/healthz?key=wrong")
+            assert resp.status_code == 401
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_wrong_header_rejected(client, app):
+    """Wrong X-API-Key header should be rejected."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/healthz", headers={"X-API-Key": "wrong"})
+            assert resp.status_code == 401
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_wrong_path_prefix_rejected(client, app):
+    """Wrong path prefix should NOT authenticate (should 404 or 401)."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        resp = await client.get("/wrongkey/healthz")
+        assert resp.status_code in (401, 404)
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_no_credentials_rejected(client, app):
+    """No credentials at all should be rejected when API key is set."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        p1, p2, p3 = _healthz_patches()
+        with p1, p2, p3:
+            resp = await client.get("/healthz")
+            assert resp.status_code == 401
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_not_configured_allows_all(client, app):
+    """When no API key is configured, all requests should pass."""
+    p1, p2, p3 = _healthz_patches()
+    with p1, p2, p3:
+        resp = await client.get("/healthz")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_key_path_prefix_on_alert(client, app):
+    """Path prefix auth should work on POST /alert too."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        with patch(
+            "src.alert_processor.AlertProcessor.process",
+            new_callable=AsyncMock,
+            return_value={"status": "ok"},
+        ):
+            resp = await client.post("/testkey/alert", content=body)
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_header_on_alert(client, app):
+    """X-API-Key header should work on POST /alert too."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        body = b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
+        with patch(
+            "src.alert_processor.AlertProcessor.process",
+            new_callable=AsyncMock,
+            return_value={"status": "ok"},
+        ):
+            resp = await client.post(
+                "/alert", content=body, headers={"X-API-Key": "testkey"}
+            )
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+
+
+@pytest.mark.asyncio
+async def test_api_key_path_prefix_on_status(client, app):
+    """Path prefix auth should work on GET /status."""
+    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    try:
+        with patch(
+            "src.jsm_client.JSMClient.get_schedule_id",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            resp = await client.get("/testkey/status")
+            assert resp.status_code == 200
+    finally:
+        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})

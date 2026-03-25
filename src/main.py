@@ -38,7 +38,7 @@ import time as _time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Path, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
 
 from .alert_processor import AlertProcessor
@@ -290,6 +290,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
     - X-Robots-Tag: tell crawlers not to index (belt + suspenders with robots.txt)
     - Content-Security-Policy: restrict resource loading
     - Referrer-Policy: prevent URL leakage in Referer header
+    - Cache-Control: prevent proxies/browsers from caching API responses
     - Server: replaced with generic value to prevent framework fingerprinting
     """
 
@@ -300,11 +301,39 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["Content-Security-Policy"] = "default-src 'none'"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
         response.headers["Server"] = "webhook-receiver"
         return response
 
 
+class _ApiKeyPathMiddleware(BaseHTTPMiddleware):
+    """
+    Support API key as the first path segment: ``/APIKEY/healthz``.
+
+    If WEBHOOK_API_KEY is configured and the first path segment matches,
+    strip it from the path and mark the request as authenticated so
+    downstream ``_verify_api_key()`` can skip re-checking.
+
+    This supports tools (like JSM webhooks) that can only configure a URL
+    and do not support custom headers or query parameters.
+    """
+
+    async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        configured_key = _settings.webhook_api_key
+        if configured_key and request.url.path != "/":
+            # Split path: /KEY/healthz → ["", "KEY", "healthz"]
+            parts = request.url.path.split("/", 2)
+            if len(parts) >= 2 and parts[1] and secrets.compare_digest(parts[1], configured_key):
+                # Rewrite path with key segment removed.
+                new_path = "/" + parts[2] if len(parts) > 2 else "/"
+                request.scope["path"] = new_path
+                request.state.api_key_verified = True
+        return await call_next(request)
+
+
 app.add_middleware(_SecurityHeadersMiddleware)
+app.add_middleware(_ApiKeyPathMiddleware)
 
 
 # ── Custom error handlers (prevent FastAPI fingerprinting) ───────────────────
@@ -361,18 +390,44 @@ def _verify_signature(request: Request, body: bytes) -> bool:
         return False
 
 
-def _verify_api_key(key: str | None) -> bool:
+def _verify_api_key(key: str | None, request: Request | None = None) -> bool:
     """
-    Check the ``?key=`` query parameter against WEBHOOK_API_KEY.
-    Returns True if no key is configured (disabled) or if the key matches.
+    Verify the API key from any of three sources (checked in order):
+
+    1. Path prefix — ``/APIKEY/endpoint`` (set by ``_ApiKeyPathMiddleware``)
+    2. ``X-API-Key`` request header
+    3. ``?key=`` query parameter
+
+    Returns True if no key is configured (disabled) or if any source matches.
     Uses constant-time comparison to prevent timing attacks.
     """
     if not _settings.webhook_api_key:
         return True
-    if not key:
-        logger.warning("Request rejected — missing ?key= parameter")
-        return False
-    return secrets.compare_digest(key, _settings.webhook_api_key)
+
+    # 1. Already verified by path-prefix middleware.
+    if request and getattr(request.state, "api_key_verified", False):
+        return True
+
+    # 2. X-API-Key header.
+    if request:
+        header_key = request.headers.get("X-API-Key")
+        if header_key and secrets.compare_digest(header_key, _settings.webhook_api_key):
+            return True
+
+    # 3. ?key= query parameter (existing behaviour).
+    if key and secrets.compare_digest(key, _settings.webhook_api_key):
+        return True
+
+    logger.warning("Request rejected — invalid or missing API key")
+    return False
+
+
+async def _require_api_key(
+    request: Request, key: str | None = Query(None)
+) -> None:
+    """FastAPI dependency that enforces API key auth from any source."""
+    if not _verify_api_key(key, request):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -392,17 +447,15 @@ async def health_check():
     return {"status": "ok"}
 
 
-@app.get("/healthz", tags=["ops"])
-async def deep_health_check(key: str | None = Query(None)):
+@app.get("/healthz", tags=["ops"], dependencies=[Depends(_require_api_key)])
+async def deep_health_check():
     """
     Deep health check — verifies JSM and HA API connectivity, schedule
     validation, on-call status, and operational state.
 
-    Returns 200 if core checks pass, 503 if any fail.  Gated by the same
-    ``?key=`` API key as other endpoints when ``WEBHOOK_API_KEY`` is set.
+    Returns 200 if core checks pass, 503 if any fail.  Gated by API key
+    (query param, header, or path prefix) when ``WEBHOOK_API_KEY`` is set.
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     # ── Core connectivity checks (run in parallel) ────────────────────
     jsm_coro = _processor.jsm_client.verify_credentials()
@@ -506,15 +559,12 @@ async def deep_health_check(key: str | None = Query(None)):
     )
 
 
-@app.get("/status", tags=["ops"])
-async def on_call_status(key: str | None = Query(None)):
+@app.get("/status", tags=["ops"], dependencies=[Depends(_require_api_key)])
+async def on_call_status():
     """
     Returns the current on-call status for all watched schedules.
     Useful for debugging and for verifying your JSM credentials work.
-    Gated by ``?key=`` when ``WEBHOOK_API_KEY`` is set.
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     status: dict = {}
 
     for name in _settings.check_oncall_schedule_names:
@@ -533,11 +583,9 @@ async def on_call_status(key: str | None = Query(None)):
     }
 
 
-@app.post("/cache/invalidate", tags=["ops"])
-async def invalidate_cache(key: str | None = Query(None)):
+@app.post("/cache/invalidate", tags=["ops"], dependencies=[Depends(_require_api_key)])
+async def invalidate_cache():
     """Force the next on-call check to query JSM instead of using cached data."""
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     _processor.jsm_client.invalidate_oncall_cache()
     return {"status": "cache invalidated"}
 
@@ -545,7 +593,7 @@ async def invalidate_cache(key: str | None = Query(None)):
 # ── Incident dashboard ────────────────────────────────────────────────────────
 
 
-@app.get("/incidents", tags=["dashboard"])
+@app.get("/incidents", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
 async def list_incidents(
     status: str | None = Query(
         default=None,
@@ -555,9 +603,6 @@ async def list_incidents(
         default=None, description="Filter by priority: P1, P2, P3, P4, P5"
     ),
     limit: int = Query(default=200, ge=1, le=1000, description="Max results"),
-    key: str | None = Query(
-        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
-    ),
 ):
     """
     Return current incident state.  Requires ``INCIDENT_DASHBOARD_ENABLED=true``.
@@ -565,8 +610,6 @@ async def list_incidents(
     Supports optional ``?status=`` and ``?priority=`` filters.
     Output is Grafana JSON datasource compatible.
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -578,15 +621,9 @@ async def list_incidents(
     return JSONResponse(content={"incidents": incidents, "count": len(incidents)})
 
 
-@app.get("/incidents/summary", tags=["dashboard"])
-async def incident_summary(
-    key: str | None = Query(
-        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
-    ),
-):
+@app.get("/incidents/summary", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
+async def incident_summary():
     """Return aggregate incident counts by status and priority."""
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -596,16 +633,11 @@ async def incident_summary(
     return JSONResponse(content=summary)
 
 
-@app.get("/incidents/{alert_id}", tags=["dashboard"])
+@app.get("/incidents/{alert_id}", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
 async def get_incident(
     alert_id: str = Path(..., description="Alert ID to look up"),
-    key: str | None = Query(
-        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
-    ),
 ):
     """Return a single incident by alert ID."""
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _ALERT_ID_RE.match(alert_id):
         raise HTTPException(status_code=400, detail="Invalid alert_id format")
     if not _incident_store:
@@ -619,12 +651,9 @@ async def get_incident(
     return JSONResponse(content=incident)
 
 
-@app.post("/incidents/{alert_id}/close", tags=["dashboard"])
+@app.post("/incidents/{alert_id}/close", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
 async def force_close_incident(
     alert_id: str = Path(..., description="Alert ID to force-close"),
-    key: str | None = Query(
-        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
-    ),
 ):
     """
     Force-close an incident from the dashboard.
@@ -632,8 +661,6 @@ async def force_close_incident(
     Sets status to 'closed' and records a ForceClose action.  Also dismisses
     any corresponding HA persistent notification and cancels TTS repeats.
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _ALERT_ID_RE.match(alert_id):
         raise HTTPException(status_code=400, detail="Invalid alert_id format")
     if not _incident_store:
@@ -652,15 +679,9 @@ async def force_close_incident(
     return {"alert_id": alert_id, "status": "closed", "action": "ForceClose"}
 
 
-@app.post("/incidents/sync", tags=["dashboard"])
-async def force_incident_sync(
-    key: str | None = Query(
-        default=None, description="API key (required if WEBHOOK_API_KEY is set)"
-    ),
-):
+@app.post("/incidents/sync", tags=["dashboard"], dependencies=[Depends(_require_api_key)])
+async def force_incident_sync():
     """Force an immediate sync of open alerts from JSM."""
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     if not _incident_store:
         raise HTTPException(
             status_code=404,
@@ -675,16 +696,12 @@ async def force_incident_sync(
 _ALERT_ID_RE = re.compile(r"^[a-zA-Z0-9\-_]{1,200}$")
 
 
-@app.post("/alert/{alert_id}/acknowledge", tags=["webhook"])
+@app.post("/alert/{alert_id}/acknowledge", tags=["webhook"], dependencies=[Depends(_require_api_key)])
 async def acknowledge_alert(
     request: Request,
     alert_id: str = Path(
         ...,
         description="JSM alert ID (alphanumeric, hyphens, underscores; max 200 chars)",
-    ),
-    key: str | None = Query(
-        default=None,
-        description="API key for authentication (must match WEBHOOK_API_KEY).",
     ),
 ):
     """
@@ -697,8 +714,6 @@ async def acknowledge_alert(
     Returns 200 with ``{"alert_id": ..., "acknowledged": true}`` on success,
     400 for invalid alert IDs, 401 for bad API key, or 502 if the JSM API call fails.
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     if not _ALERT_ID_RE.match(alert_id):
         raise HTTPException(status_code=400, detail="Invalid alert_id format")
@@ -721,7 +736,7 @@ async def acknowledge_alert(
     raise HTTPException(status_code=502, detail="JSM acknowledge failed")
 
 
-@app.post("/alert", tags=["webhook"])
+@app.post("/alert", tags=["webhook"], dependencies=[Depends(_require_api_key)])
 async def receive_alert(
     request: Request,
     mode: str | None = Query(
@@ -731,10 +746,6 @@ async def receive_alert(
             "Use this for schedules like Internal Systems_schedule."
         ),
     ),
-    key: str | None = Query(
-        default=None,
-        description="API key for webhook authentication (must match WEBHOOK_API_KEY).",
-    ),
 ):
     """
     Main JSM / OpsGenie inbound webhook endpoint.
@@ -743,8 +754,6 @@ async def receive_alert(
       • https://<your-host>/alert?key=YOUR_KEY               → on-call check
       • https://<your-host>/alert?mode=always&key=YOUR_KEY   → always notify
     """
-    if not _verify_api_key(key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     client_ip = request.client.host if request.client else "unknown"
     if _rate_limited(client_ip):
