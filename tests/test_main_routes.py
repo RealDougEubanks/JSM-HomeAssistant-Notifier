@@ -398,6 +398,9 @@ async def test_metrics_endpoint(client):
 
 @pytest.mark.asyncio
 async def test_reload_success(client):
+    import src.main as main_mod
+
+    main_mod._last_reload = 0.0  # reset cooldown
     resp = await client.post("/reload")
     assert resp.status_code == 200
     assert resp.json()["status"] == "reloaded"
@@ -407,6 +410,7 @@ async def test_reload_success(client):
 async def test_reload_requires_api_key(client):
     import src.main as main_mod
 
+    main_mod._last_reload = 0.0  # reset cooldown
     main_mod._settings = main_mod._settings.model_copy(
         update={"webhook_api_key": "reloadkey"}
     )

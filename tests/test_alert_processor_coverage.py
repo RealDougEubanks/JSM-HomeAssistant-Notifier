@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,7 +11,6 @@ from src.alert_processor import AlertProcessor
 from src.config import Settings
 from src.ha_client import HAClient
 from src.jsm_client import JSMClient
-from src.models import AlertDetails, JSMWebhookPayload
 from tests.conftest import make_alert
 
 

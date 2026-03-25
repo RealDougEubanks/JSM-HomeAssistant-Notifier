@@ -38,10 +38,12 @@ import secrets
 import sys
 import time as _time
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from .alert_processor import AlertProcessor
 from .config import Settings
@@ -111,7 +113,7 @@ class _JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         entry = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -149,7 +151,7 @@ _STARTUP_WALL: str = ""
 def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | None]:
     global _STARTUP_MONOTONIC, _STARTUP_WALL  # noqa: PLW0603
     _STARTUP_MONOTONIC = _time.monotonic()
-    _STARTUP_WALL = datetime.now(timezone.utc).isoformat()
+    _STARTUP_WALL = datetime.now(UTC).isoformat()
     settings = Settings()  # Reads from .env / env vars
 
     jsm_client = JSMClient(
@@ -324,10 +326,6 @@ app, _settings, _processor, _incident_store = _build_app()
 
 
 # ── Security middleware ──────────────────────────────────────────────────────
-
-
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response as StarletteResponse
 
 
 class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -620,7 +618,7 @@ async def deep_health_check():
     return JSONResponse(
         {
             "healthy": all_ok,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "started_at": _STARTUP_WALL,
             "uptime_seconds": uptime,
             "version": app.version,

@@ -12,20 +12,20 @@ from src.models import AlertDetails
 
 
 def _client(**kwargs) -> HAClient:
-    defaults = dict(
-        ha_url="https://ha.example.com",
-        ha_token="token",
-        media_player="media_player.test",
-        tts_service="tts.test",
-        tts_language="en-US",
-        tts_voice="TestVoice",
-    )
+    defaults = {
+        "ha_url": "https://ha.example.com",
+        "ha_token": "token",
+        "media_player": "media_player.test",
+        "tts_service": "tts.test",
+        "tts_language": "en-US",
+        "tts_voice": "TestVoice",
+    }
     defaults.update(kwargs)
     return HAClient(**defaults)
 
 
 def _alert(**kwargs) -> AlertDetails:
-    defaults = dict(alertId="a1", message="Server down", priority="P1")
+    defaults = {"alertId": "a1", "message": "Server down", "priority": "P1"}
     defaults.update(kwargs)
     return AlertDetails(**defaults)
 
