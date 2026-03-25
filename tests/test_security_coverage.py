@@ -278,3 +278,70 @@ async def test_status_schedule_not_found(client, app):
         assert resp.status_code == 200
         data = resp.json()
         assert "on_call_schedules" in data
+
+
+# ── Endpoint discovery prevention ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_openapi_json_disabled(client, app):
+    """/openapi.json should not be served."""
+    resp = await client.get("/openapi.json")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_docs_disabled(client, app):
+    """/docs should not be served."""
+    resp = await client.get("/docs")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_redoc_disabled(client, app):
+    """/redoc should not be served."""
+    resp = await client.get("/redoc")
+    assert resp.status_code == 404
+
+
+# ── Security headers ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_security_headers_present(client, app):
+    """All responses should include security headers."""
+    resp = await client.get("/health")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["X-Robots-Tag"] == "noindex, nofollow"
+    assert resp.headers["Content-Security-Policy"] == "default-src 'none'"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    assert resp.headers["Server"] == "webhook-receiver"
+
+
+@pytest.mark.asyncio
+async def test_server_header_not_uvicorn(client, app):
+    """Server header should not reveal the framework."""
+    resp = await client.get("/health")
+    assert "uvicorn" not in resp.headers.get("Server", "").lower()
+    assert "fastapi" not in resp.headers.get("Server", "").lower()
+
+
+# ── Normalized error responses ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_404_generic_response(client, app):
+    """404 should not reveal framework identity."""
+    resp = await client.get("/nonexistent-path")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert data == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_robots_txt(client, app):
+    """robots.txt should disallow all crawling."""
+    resp = await client.get("/robots.txt")
+    assert resp.status_code == 200
+    assert "Disallow: /" in resp.text

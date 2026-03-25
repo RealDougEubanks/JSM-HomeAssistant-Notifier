@@ -265,12 +265,65 @@ def _build_app() -> tuple[FastAPI, Settings, AlertProcessor, IncidentStore | Non
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
+        openapi_url=None,  # prevent /openapi.json endpoint discovery
     )
 
     return app, settings, processor, incident_store
 
 
 app, _settings, _processor, _incident_store = _build_app()
+
+
+# ── Security middleware ──────────────────────────────────────────────────────
+
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
+
+
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Add security headers to every response and strip server identification.
+
+    - X-Content-Type-Options: prevent MIME sniffing
+    - X-Frame-Options: prevent clickjacking
+    - X-Robots-Tag: tell crawlers not to index (belt + suspenders with robots.txt)
+    - Content-Security-Policy: restrict resource loading
+    - Referrer-Policy: prevent URL leakage in Referer header
+    - Server: replaced with generic value to prevent framework fingerprinting
+    """
+
+    async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        response: StarletteResponse = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Server"] = "webhook-receiver"
+        return response
+
+
+app.add_middleware(_SecurityHeadersMiddleware)
+
+
+# ── Custom error handlers (prevent FastAPI fingerprinting) ───────────────────
+
+
+@app.exception_handler(404)
+async def _custom_404(request: Request, exc: HTTPException):  # noqa: ARG001
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+
+@app.exception_handler(405)
+async def _custom_405(request: Request, exc: HTTPException):  # noqa: ARG001
+    return JSONResponse(status_code=405, content={"detail": "Method not allowed"})
+
+
+@app.exception_handler(422)
+async def _custom_422(request: Request, exc: HTTPException):  # noqa: ARG001
+    """Override FastAPI's distinctive validation error format."""
+    return JSONResponse(status_code=422, content={"detail": "Validation error"})
 
 
 # ── Webhook signature verification ───────────────────────────────────────────
