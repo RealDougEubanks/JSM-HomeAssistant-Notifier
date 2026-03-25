@@ -53,7 +53,7 @@ JSM alert created / escalated
 - **Alert batching** — combine multiple alerts arriving within a configurable window into one TTS announcement
 - **TTS repeat (pager mode)** — repeat TTS at intervals for critical alerts until acknowledged or max repeats hit
 - **Acknowledge from HA** — `POST /alert/{id}/acknowledge` endpoint lets HA automations ack alerts without opening JSM
-- **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if it has expired
+- **Token health check** — daily background job verifies the Atlassian API token; fires a HA TTS warning if expired (TTS suppressed during quiet hours; persistent notification still created)
 - **Deep health check** — `GET /healthz` verifies both JSM and HA API connectivity (returns 503 if either fails)
 - **Startup connectivity checks** — verifies JSM and HA reachability at boot, logs warnings if unreachable
 - **HA automation webhooks** — fire HA webhook triggers on Create, Escalate, Acknowledge, Close, Update, and SLA Breach events to control lights, scenes, scripts
@@ -1244,6 +1244,8 @@ The service checks token validity every `TOKEN_CHECK_INTERVAL_HOURS` hours (defa
 3. Restart the container: `docker compose restart`
 
 The persistent HA notification will be dismissed automatically on the next successful token check (within 30 seconds of startup).
+
+**Quiet hours:** If the credential check fails during a `SILENT_WINDOW`, the TTS announcement is suppressed — only the persistent dashboard notification is created.  This prevents the service from waking you up at night for a non-urgent token issue that can wait until morning.
 
 ---
 
