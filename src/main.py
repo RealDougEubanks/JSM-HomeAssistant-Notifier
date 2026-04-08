@@ -396,18 +396,21 @@ app.add_middleware(_ApiKeyPathMiddleware)
 
 @app.exception_handler(404)
 async def _custom_404(request: Request, exc: HTTPException):  # noqa: ARG001
-    return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return StarletteResponse(status_code=404)
 
 
 @app.exception_handler(405)
 async def _custom_405(request: Request, exc: HTTPException):  # noqa: ARG001
-    return JSONResponse(status_code=405, content={"detail": "Method not allowed"})
+    # Return 404 rather than 405 — prevents confirming that an endpoint exists
+    # by probing with different HTTP methods.
+    return StarletteResponse(status_code=404)
 
 
 @app.exception_handler(422)
 async def _custom_422(request: Request, exc: HTTPException):  # noqa: ARG001
-    """Override FastAPI's distinctive validation error format."""
-    return JSONResponse(status_code=422, content={"detail": "Validation error"})
+    # FastAPI's 422 Unprocessable Entity format is highly distinctive.
+    # Return an empty 404 to prevent framework fingerprinting.
+    return StarletteResponse(status_code=404)
 
 
 # ── Webhook signature verification ───────────────────────────────────────────

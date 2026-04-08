@@ -107,7 +107,7 @@ curl http://localhost:8080/health
 To build the Docker image locally instead of pulling from GHCR:
 
 ```bash
-docker build -t ghcr.io/dougeubanks/jsm-ha-notifier:latest .
+docker build -t ghcr.io/realdougeubanks/jsm-ha-notifier:latest .
 docker compose up -d
 docker compose logs -f
 ```
@@ -117,7 +117,7 @@ This tags the local build with the same image name the compose file expects.
 If you've made code changes and Docker serves a cached layer, force a clean rebuild:
 
 ```bash
-docker build --no-cache -t ghcr.io/dougeubanks/jsm-ha-notifier:latest .
+docker build --no-cache -t ghcr.io/realdougeubanks/jsm-ha-notifier:latest .
 docker compose up -d
 docker compose logs -f
 ```
