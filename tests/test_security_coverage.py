@@ -347,11 +347,11 @@ async def test_server_header_not_uvicorn(client, app):
 
 @pytest.mark.asyncio
 async def test_404_generic_response(client, app):
-    """404 should not reveal framework identity."""
+    """404 should return an empty body with no framework fingerprints."""
     resp = await client.get("/nonexistent-path")
     assert resp.status_code == 404
-    data = resp.json()
-    assert data == {"detail": "Not found"}
+    assert resp.content == b""
+    assert "application/json" not in resp.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
@@ -574,7 +574,7 @@ async def test_all_protected_endpoints_return_404_without_key(client, app, metho
         assert (
             resp.status_code == 404
         ), f"{method} {path} returned {resp.status_code}, expected 404"
-        assert resp.json() == {"detail": "Not found"}
+        assert resp.content == b""
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
 
@@ -594,6 +594,6 @@ async def test_all_protected_endpoints_return_404_with_wrong_key(
         assert (
             resp.status_code == 404
         ), f"{method} {path} returned {resp.status_code}, expected 404"
-        assert resp.json() == {"detail": "Not found"}
+        assert resp.content == b""
     finally:
         app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
