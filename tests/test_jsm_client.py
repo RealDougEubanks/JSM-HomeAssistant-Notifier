@@ -102,7 +102,9 @@ async def test_is_on_call_true(client: JSMClient):
         respx.get(oncall_url).mock(
             return_value=httpx.Response(
                 200,
-                json={"onCallParticipants": [{"id": "user-42", "type": "user", "name": "Me"}]},
+                json={
+                    "onCallParticipants": [{"id": "user-42", "type": "user", "name": "Me"}]
+                },
             )
         )
         assert await client.is_on_call("s1") is True
@@ -115,7 +117,9 @@ async def test_is_on_call_false(client: JSMClient):
         respx.get(oncall_url).mock(
             return_value=httpx.Response(
                 200,
-                json={"onCallParticipants": [{"id": "other", "type": "user", "name": "O"}]},
+                json={
+                    "onCallParticipants": [{"id": "other", "type": "user", "name": "O"}]
+                },
             )
         )
         assert await client.is_on_call("s1") is False
