@@ -101,7 +101,7 @@ async def test_is_on_call_true(client: JSMClient):
     with respx.mock:
         respx.get(oncall_url).mock(
             return_value=httpx.Response(
-                200, json={"onCallParticipants": [{"id": "user-42", "name": "Me"}]}
+                200, json={"onCallParticipants": [{"id": "user-42", "type": "user"}]}
             )
         )
         assert await client.is_on_call("s1") is True
@@ -113,10 +113,37 @@ async def test_is_on_call_false(client: JSMClient):
     with respx.mock:
         respx.get(oncall_url).mock(
             return_value=httpx.Response(
-                200, json={"onCallParticipants": [{"id": "other", "name": "O"}]}
+                200, json={"onCallParticipants": [{"id": "other", "type": "user"}]}
             )
         )
         assert await client.is_on_call("s1") is False
+
+
+@pytest.mark.asyncio
+async def test_is_on_call_true_via_nested_team(client: JSMClient):
+    """User reached through escalation → team nesting is detected as on-call."""
+    oncall_url = f"{_sched_url(client)}/s1/on-calls"
+    nested_response = {
+        "onCallParticipants": [
+            {
+                "id": "esc-1",
+                "type": "escalation",
+                "onCallParticipants": [
+                    {
+                        "id": "team-1",
+                        "type": "team",
+                        "onCallParticipants": [
+                            {"id": "user-42", "type": "user"},
+                            {"id": "other-user", "type": "user"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    with respx.mock:
+        respx.get(oncall_url).mock(return_value=httpx.Response(200, json=nested_response))
+        assert await client.is_on_call("s1") is True
 
 
 @pytest.mark.asyncio
