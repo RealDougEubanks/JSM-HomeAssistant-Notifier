@@ -10,7 +10,7 @@
 
 services:
   jsm-ha-notifier:
-    image: ghcr.io/dougeubanks/jsm-ha-notifier:latest
+    image: ghcr.io/realdougeubanks/jsm-ha-notifier:latest
     container_name: jsm-ha-notifier
     restart: unless-stopped
 
