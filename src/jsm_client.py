@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 _REQUEST_TIMEOUT = 10.0
 
 
+def _collect_user_ids(participants: list[dict]) -> set[str]:
+    """Recursively collect all user IDs from a nested onCallParticipants tree.
+
+    JSM returns a hierarchy: escalation → team → user.  Each level may have
+    its own ``onCallParticipants`` list, so we walk the whole tree.
+    """
+    user_ids: set[str] = set()
+    for p in participants:
+        if p.get("type") == "user":
+            user_ids.add(p["id"])
+        nested = p.get("onCallParticipants") or []
+        user_ids |= _collect_user_ids(nested)
+    return user_ids
+
+
 class JSMClient:
     def __init__(
         self,
@@ -176,13 +191,14 @@ class JSMClient:
             data = response.json()
 
             participants = data.get("onCallParticipants") or []
-            is_on_call = any(p.get("id") == self.my_user_id for p in participants)
+            user_ids = _collect_user_ids(participants)
+            is_on_call = self.my_user_id in user_ids
             self._oncall_cache[schedule_id] = (is_on_call, now)
             logger.info(
-                "On-call status for schedule %s: %s (participants: %s)",
+                "On-call status for schedule %s: %s (users on-call: %s)",
                 schedule_id,
                 is_on_call,
-                [p.get("name", p.get("id")) for p in participants],
+                user_ids,
             )
             return is_on_call
 
