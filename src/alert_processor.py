@@ -88,7 +88,14 @@ class AlertProcessor:
         self._dedup_cache: dict[str, float] = {}
 
         # Parsed derived config.
-        self._player_routes = parse_player_routing(settings.ha_media_player_routing)
+        try:
+            self._player_routes = parse_player_routing(settings.ha_media_player_routing)
+        except ValueError as exc:
+            logger.warning(
+                "HA_MEDIA_PLAYER_ROUTING is invalid (%s) — ignoring, using default player",
+                exc,
+            )
+            self._player_routes = []
         self._silent_override_priorities = _parse_priority_set(
             settings.silent_window_override_priorities
         )
