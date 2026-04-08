@@ -33,8 +33,8 @@ class AlertDetails(BaseModel):
     entity: str | None = None
     tags: list[str] = Field(default_factory=list)
     details: dict[str, Any] = Field(default_factory=dict)
-    responders: list[dict[str, Any]] = Field(default_factory=list)
-    teams: list[dict[str, Any]] = Field(default_factory=list)
+    responders: list[dict[str, Any] | str] = Field(default_factory=list)
+    teams: list[dict[str, Any] | str] = Field(default_factory=list)
     createdAt: int | None = None
     updatedAt: int | None = None
     # Integration / username that created the alert
