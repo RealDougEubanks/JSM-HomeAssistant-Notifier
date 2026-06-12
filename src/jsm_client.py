@@ -51,6 +51,21 @@ class JSMClient:
         """Close the underlying HTTP client.  Called during application shutdown."""
         await self._http.aclose()
 
+    def update_config(
+        self,
+        *,
+        api_url: str,
+        cloud_id: str,
+        username: str,
+        api_token: str,
+        my_user_id: str,
+    ) -> None:
+        """Apply new connection settings in place (used by config hot-reload)."""
+        self.api_url = api_url.rstrip("/")
+        self.cloud_id = cloud_id
+        self._auth = (username, api_token)
+        self.my_user_id = my_user_id
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     def _base_headers(self) -> dict[str, str]:
@@ -106,11 +121,14 @@ class JSMClient:
                     )
                 url = None
         else:
-            logger.warning(
-                "Pagination safety cap reached (%d pages); "
-                "some schedules may not be loaded.",
-                self._MAX_PAGES,
-            )
+            # for/else: runs only when range() is exhausted without a break.
+            # `url` still being set means a next page existed beyond the cap.
+            if url:
+                logger.warning(
+                    "Pagination safety cap reached (%d pages); "
+                    "some schedules may not be loaded.",
+                    self._MAX_PAGES,
+                )
 
         logger.debug("Fetched %d schedules from JSM", len(schedules))
         return schedules

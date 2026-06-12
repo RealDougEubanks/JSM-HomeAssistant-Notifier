@@ -1,3 +1,10 @@
+# Supply-chain note: both stages MUST reference the same base image.  The
+# tag is mutable — for fully reproducible builds, pin by digest instead:
+#   FROM python:3.12-slim@sha256:<digest>   (docker buildx imagetools inspect
+#   python:3.12-slim shows the current digest).  We deliberately track the
+# tag here so scheduled rebuilds pick up upstream security patches; the
+# release workflow scans every published image for known CVEs.
+
 # ── Stage 1: dependency builder ──────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 

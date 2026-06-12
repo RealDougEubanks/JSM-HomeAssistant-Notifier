@@ -48,6 +48,11 @@ def app(_patch_env):
         import src.main as main_mod
 
         importlib.reload(main_mod)
+        # rate_buckets lives in src.security (not reloaded above) — clear it
+        # so request counts don't accumulate across tests.
+        from src.security import rate_buckets
+
+        rate_buckets.clear()
         yield main_mod
 
 
@@ -65,7 +70,7 @@ async def client(app):
 async def test_valid_signature_accepted(client, app):
     """Valid HMAC signature should be accepted."""
     secret = "test-secret-key"
-    app._settings = app._settings.model_copy(update={"webhook_secret": secret})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": secret})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -84,13 +89,13 @@ async def test_valid_signature_accepted(client, app):
             )
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_secret": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": ""})
 
 
 @pytest.mark.asyncio
 async def test_invalid_signature_rejected(client, app):
     """Wrong HMAC signature should be rejected with 401."""
-    app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -102,13 +107,13 @@ async def test_invalid_signature_rejected(client, app):
         )
         assert resp.status_code == 401
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_secret": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": ""})
 
 
 @pytest.mark.asyncio
 async def test_missing_signature_rejected(client, app):
     """Missing signature header when secret is set should be rejected."""
-    app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -116,13 +121,13 @@ async def test_missing_signature_rejected(client, app):
         resp = await client.post("/alert", content=body)
         assert resp.status_code == 401
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_secret": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": ""})
 
 
 @pytest.mark.asyncio
 async def test_malformed_signature_header(client, app):
     """Signature without sha256= prefix should be rejected."""
-    app._settings = app._settings.model_copy(update={"webhook_secret": "real-secret"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": "real-secret"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -134,7 +139,7 @@ async def test_malformed_signature_header(client, app):
         )
         assert resp.status_code == 401
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_secret": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_secret": ""})
 
 
 @pytest.mark.asyncio
@@ -160,7 +165,7 @@ async def test_no_secret_configured_signature_ignored(client, app):
 @pytest.mark.asyncio
 async def test_api_key_valid(client, app):
     """Valid API key should be accepted."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "mykey123"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "mykey123"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -173,13 +178,13 @@ async def test_api_key_valid(client, app):
             resp = await client.post("/alert?key=mykey123", content=body)
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_wrong(client, app):
     """Wrong API key returns 404 to hide endpoint existence."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "mykey123"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "mykey123"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -187,7 +192,7 @@ async def test_api_key_wrong(client, app):
         resp = await client.post("/alert?key=wrongkey", content=body)
         assert resp.status_code == 404
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── /healthz with found schedule ─────────────────────────────────────────────
@@ -389,90 +394,90 @@ def _healthz_patches():
 @pytest.mark.asyncio
 async def test_api_key_via_query_param(client, app):
     """API key as ?key= query parameter should be accepted."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz?key=testkey")
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_via_header(client, app):
     """API key as X-API-Key header should be accepted."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz", headers={"X-API-Key": "testkey"})
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_via_path_prefix(client, app):
     """API key as path prefix /KEY/endpoint should be accepted."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/testkey/healthz")
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_wrong_query_param_rejected(client, app):
     """Wrong ?key= value returns 404."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz?key=wrong")
             assert resp.status_code == 404
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_wrong_header_rejected(client, app):
     """Wrong X-API-Key header returns 404."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz", headers={"X-API-Key": "wrong"})
             assert resp.status_code == 404
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_wrong_path_prefix_rejected(client, app):
     """Wrong path prefix should NOT authenticate (should 404 or 401)."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         resp = await client.get("/wrongkey/healthz")
         assert resp.status_code in (401, 404)
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_no_credentials_rejected(client, app):
     """No credentials returns 404 (endpoint appears to not exist)."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         p1, p2, p3 = _healthz_patches()
         with p1, p2, p3:
             resp = await client.get("/healthz")
             assert resp.status_code == 404
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
@@ -487,7 +492,7 @@ async def test_api_key_not_configured_allows_all(client, app):
 @pytest.mark.asyncio
 async def test_api_key_path_prefix_on_alert(client, app):
     """Path prefix auth should work on POST /alert too."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -500,13 +505,13 @@ async def test_api_key_path_prefix_on_alert(client, app):
             resp = await client.post("/testkey/alert", content=body)
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_header_on_alert(client, app):
     """X-API-Key header should work on POST /alert too."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         body = (
             b'{"action":"Create","alert":{"alertId":"x","message":"m","priority":"P1"}}'
@@ -521,13 +526,13 @@ async def test_api_key_header_on_alert(client, app):
             )
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
 async def test_api_key_path_prefix_on_status(client, app):
     """Path prefix auth should work on GET /status."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "testkey"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "testkey"})
     try:
         with patch(
             "src.jsm_client.JSMClient.get_schedule_id",
@@ -537,7 +542,7 @@ async def test_api_key_path_prefix_on_status(client, app):
             resp = await client.get("/testkey/status")
             assert resp.status_code == 200
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── All protected endpoints return 404 without API key ───────────────────────
@@ -565,7 +570,7 @@ _PROTECTED_ENDPOINTS = [
 @pytest.mark.parametrize("method,path", _PROTECTED_ENDPOINTS)
 async def test_all_protected_endpoints_return_404_without_key(client, app, method, path):
     """Every protected endpoint must return 404 when API key is set but not provided."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "required-key"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "required-key"})
     try:
         if method == "GET":
             resp = await client.get(path)
@@ -576,7 +581,7 @@ async def test_all_protected_endpoints_return_404_without_key(client, app, metho
         ), f"{method} {path} returned {resp.status_code}, expected 404"
         assert resp.content == b""
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 @pytest.mark.asyncio
@@ -585,7 +590,7 @@ async def test_all_protected_endpoints_return_404_with_wrong_key(
     client, app, method, path
 ):
     """Every protected endpoint must return 404 with an incorrect API key."""
-    app._settings = app._settings.model_copy(update={"webhook_api_key": "correct-key"})
+    app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": "correct-key"})
     try:
         if method == "GET":
             resp = await client.get(path, params={"key": "wrong-key"})
@@ -596,4 +601,4 @@ async def test_all_protected_endpoints_return_404_with_wrong_key(
         ), f"{method} {path} returned {resp.status_code}, expected 404"
         assert resp.content == b""
     finally:
-        app._settings = app._settings.model_copy(update={"webhook_api_key": ""})
+        app.app.state.settings = app.app.state.settings.model_copy(update={"webhook_api_key": ""})

@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from src.security import rate_buckets
+
 # Patch environment before importing main (module-level _build_app runs on import)
 _ENV = {
     "JSM_CLOUD_ID": "test-cloud",
@@ -50,6 +52,9 @@ def app(_patch_env):
         import src.main as main_mod
 
         importlib.reload(main_mod)
+        # rate_buckets lives in src.security (not reloaded above) — clear it
+        # so request counts don't accumulate across tests.
+        rate_buckets.clear()
         yield main_mod.app
 
 
@@ -220,7 +225,7 @@ async def test_api_key_required_when_set(client):
     """Missing API key returns 404 (not 401) to hide endpoint existence."""
     import src.main as main_mod
 
-    main_mod._settings = main_mod._settings.model_copy(
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
         update={"webhook_api_key": "secret123"}
     )
     try:
@@ -230,7 +235,7 @@ async def test_api_key_required_when_set(client):
         )
         assert resp.status_code == 404
     finally:
-        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── Webhook signature ────────────────────────────────────────────────────────
@@ -240,7 +245,7 @@ async def test_api_key_required_when_set(client):
 async def test_signature_required_when_set(client):
     import src.main as main_mod
 
-    main_mod._settings = main_mod._settings.model_copy(
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
         update={"webhook_secret": "mysecret"}
     )
     try:
@@ -250,7 +255,7 @@ async def test_signature_required_when_set(client):
         )
         assert resp.status_code == 401
     finally:
-        main_mod._settings = main_mod._settings.model_copy(update={"webhook_secret": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_secret": ""})
 
 
 # ── Deep health check ────────────────────────────────────────────────────────
@@ -345,7 +350,7 @@ async def test_deep_health_api_key_required(client):
     """When WEBHOOK_API_KEY is set, /healthz returns 404 without key."""
     import src.main as main_mod
 
-    main_mod._settings = main_mod._settings.model_copy(
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
         update={"webhook_api_key": "secret123"}
     )
     try:
@@ -357,7 +362,7 @@ async def test_deep_health_api_key_required(client):
             resp = await client.get("/healthz?key=secret123")
             assert resp.status_code == 200
     finally:
-        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})
 
 
 # ── On-call status ───────────────────────────────────────────────────────────
@@ -391,6 +396,90 @@ async def test_metrics_endpoint(client):
     assert resp.headers["content-type"].startswith("text/plain")
 
 
+# ── Rate limiting ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_throttles_invalid_key_requests(client):
+    """Brute-forcing the API key must be throttled (limiter runs pre-auth)."""
+    import src.main as main_mod
+
+    rate_buckets.clear()
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+        update={"webhook_api_key": "secret-key", "rate_limit_requests": 5}
+    )
+    try:
+        statuses = [
+            (await client.get("/status?key=wrong-guess")).status_code
+            for _ in range(8)
+        ]
+        assert statuses[:5] == [404] * 5  # stealth 404 for bad key
+        assert statuses[5:] == [429] * 3  # then throttled
+    finally:
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"webhook_api_key": "", "rate_limit_requests": 60}
+        )
+        rate_buckets.clear()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_applies_to_alert_endpoint(client):
+    import src.main as main_mod
+
+    rate_buckets.clear()
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+        update={"rate_limit_requests": 2}
+    )
+    try:
+        for _ in range(2):
+            await client.post("/alert", content=b"{}")
+        resp = await client.post("/alert", content=b"{}")
+        assert resp.status_code == 429
+    finally:
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"rate_limit_requests": 60}
+        )
+        rate_buckets.clear()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_exempts_health(client):
+    """The Docker healthcheck endpoint must never be throttled."""
+    import src.main as main_mod
+
+    rate_buckets.clear()
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+        update={"rate_limit_requests": 2}
+    )
+    try:
+        for _ in range(10):
+            resp = await client.get("/health")
+            assert resp.status_code == 200
+    finally:
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"rate_limit_requests": 60}
+        )
+        rate_buckets.clear()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_disabled_when_zero(client):
+    import src.main as main_mod
+
+    rate_buckets.clear()
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+        update={"rate_limit_requests": 0}
+    )
+    try:
+        for _ in range(10):
+            resp = await client.get("/status")
+            assert resp.status_code != 429
+    finally:
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"rate_limit_requests": 60}
+        )
+
+
 # ── Reload endpoint ──────────────────────────────────────────────────────────
 
 
@@ -398,18 +487,43 @@ async def test_metrics_endpoint(client):
 async def test_reload_success(client):
     import src.main as main_mod
 
-    main_mod._last_reload = 0.0  # reset cooldown
+    main_mod.app.state.last_reload = 0.0  # reset cooldown
     resp = await client.post("/reload")
     assert resp.status_code == 200
     assert resp.json()["status"] == "reloaded"
 
 
 @pytest.mark.asyncio
+async def test_reload_applies_derived_settings(client, monkeypatch):
+    """Changed routing/priority env vars must take effect after /reload."""
+    import src.main as main_mod
+
+    main_mod.app.state.last_reload = 0.0  # reset cooldown
+    monkeypatch.setenv("TTS_REPEAT_PRIORITIES", "P1,P2")
+    monkeypatch.setenv("TTS_REPEAT_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv(
+        "HA_MEDIA_PLAYER_ROUTING", "media_player.office@00:00-23:59"
+    )
+    monkeypatch.setenv("HA_TTS_VOICE", "AriaNeural")
+
+    resp = await client.post("/reload")
+    assert resp.status_code == 200
+
+    proc = main_mod.app.state.processor
+    assert proc._repeat_priorities == frozenset({"P1", "P2"})
+    assert proc._player_routes and proc._player_routes[0][0] == "media_player.office"
+    assert proc._resolve_media_player() == "media_player.office"
+    assert proc._should_repeat("P2")
+    # Clients are updated in place too.
+    assert proc.ha_client.tts_voice == "AriaNeural"
+
+
+@pytest.mark.asyncio
 async def test_reload_requires_api_key(client):
     import src.main as main_mod
 
-    main_mod._last_reload = 0.0  # reset cooldown
-    main_mod._settings = main_mod._settings.model_copy(
+    main_mod.app.state.last_reload = 0.0  # reset cooldown
+    main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
         update={"webhook_api_key": "reloadkey"}
     )
     try:
@@ -419,4 +533,4 @@ async def test_reload_requires_api_key(client):
         resp = await client.post("/reload?key=reloadkey")
         assert resp.status_code == 200
     finally:
-        main_mod._settings = main_mod._settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})

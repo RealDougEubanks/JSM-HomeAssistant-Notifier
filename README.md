@@ -1,6 +1,39 @@
 # JSM Home Assistant Notifier
 
+[![CI](https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/actions/workflows/ci.yml)
+[![GHCR image](https://img.shields.io/badge/ghcr.io-jsm--ha--notifier-blue?logo=docker)](https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/pkgs/container/jsm-ha-notifier)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 A lightweight Docker service that bridges **Jira Service Management (JSM / OpsGenie)** alerts to **Home Assistant** — with smart on-call routing, escalation detection, rich TTS announcements, and persistent dashboard notifications.
+
+**[Jump to Quick Start ↓](#quick-start)**
+
+---
+
+## Contents
+
+- [How It Works](#how-it-works)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Making the Service Externally Accessible](#making-the-service-externally-accessible)
+- [JSM Webhook Configuration](#jsm-webhook-configuration)
+- [Testing With curl](#testing-with-curl)
+- [Using With Other Webhook Sources](#using-with-other-webhook-sources)
+- [JSM Webhook Events Reference](#jsm-webhook-events-reference)
+- [HA Automation Webhooks](#ha-automation-webhooks)
+- [Incident State Dashboard](#incident-state-dashboard)
+- [Running on unRAID (or any Docker host)](#running-on-unraid-or-any-docker-host)
+- [CI/CD — GitHub Actions & Container Registries](#cicd--github-actions--container-registries)
+- [API Reference](#api-reference)
+- [Notification Details](#notification-details)
+- [Local Development](#local-development)
+- [Troubleshooting](#troubleshooting)
+- [Production Recommendations](#production-recommendations)
+- [Security Checklist](#security-checklist)
+- [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
@@ -260,19 +293,44 @@ The simplest way to secure your webhook endpoints.  Set `WEBHOOK_API_KEY` in `.e
 
 All three methods work on every authenticated endpoint.  Generate a key: `openssl rand -hex 32`
 
-Requests without a valid key receive a 401 Unauthorized.
+Requests without a valid key receive a stealth **404** (not 401), so attackers cannot confirm that authenticated endpoints exist.
+
+#### ⚠️ Keys in URLs leak into logs
+
+The query-parameter and path-prefix methods exist because JSM webhooks can only be configured with a bare URL — but any URL-borne secret ends up in reverse-proxy access logs, browser history, and intermediate proxies. **Prefer the `X-API-Key` header wherever the caller supports it** (scripts, HA automations, Grafana), and if you front this service with a reverse proxy:
+
+- Scrub or disable access logging for the key. nginx example:
+
+  ```nginx
+  # Redact the key query param / path segment before logging
+  map $request_uri $loggable_uri {
+      ~^(?<pre>.*[?&]key=)[^&]+(?<post>.*)$  "${pre}REDACTED${post}";
+      default                                 $request_uri;
+  }
+  log_format scrubbed '$remote_addr - [$time_local] "$request_method $loggable_uri" $status';
+  access_log /var/log/nginx/access.log scrubbed;
+  ```
+
+  Caddy: add `log { format filter { request>uri query { replace key REDACTED } } }` to the site block.
+
+- Rotate `WEBHOOK_API_KEY` (and update the JSM webhook URLs) if a proxy has already logged it.
+
+The service itself never logs request URLs, and uvicorn access logging is disabled in the container.
 
 ### Optional — HMAC Webhook Signature
 
-For additional security (or as an alternative to API keys), set `WEBHOOK_SECRET` in `.env` and add a custom header to each JSM webhook:
+If set, `WEBHOOK_SECRET` requires every `POST /alert` to carry an `X-Hub-Signature-256: sha256=<hex>` header containing the HMAC-SHA256 of the raw request body keyed with the secret.
 
-| Header name | Value |
+> **⚠️ JSM cannot sign requests itself.** JSM / OpsGenie outgoing-webhook custom headers are *static strings* — there is no template function to compute a per-request HMAC over the body. If JSM posts directly to this service, leave `WEBHOOK_SECRET` empty and rely on `WEBHOOK_API_KEY`.
+
+Use `WEBHOOK_SECRET` when a signing-capable caller sits in front of the service:
+
+| Caller | How |
 |---|---|
-| `X-Hub-Signature-256` | `sha256={{ hmac_sha256(body, "YOUR_SECRET") }}` |
+| Forwarding proxy you control (Cloudflare Worker, AWS Lambda, nginx+Lua) | Receive the JSM webhook, compute `sha256=` HMAC of the body, forward with the header |
+| Your own scripts / automations | Compute the HMAC at send time (e.g. `openssl dgst -sha256 -hmac "$SECRET"`) |
 
-You can use **both** `WEBHOOK_API_KEY` and `WEBHOOK_SECRET` together for defense in depth.
-
-> Check the Atlassian JSM documentation for the exact Jinja/template syntax supported in your version's outgoing webhook headers.
+You can use **both** `WEBHOOK_API_KEY` and `WEBHOOK_SECRET` together for defense in depth when your caller supports signing.
 
 ---
 
@@ -785,13 +843,15 @@ INCIDENT_DB_PATH=/data/incidents.db
 INCIDENT_SYNC_INTERVAL_MINUTES=5
 ```
 
-For persistent storage, mount a volume in `docker-compose.yml`:
+> **Note:** the default `INCIDENT_DB_PATH=/tmp/incidents.db` lives on the container's tmpfs mount, so incident history is intentionally **wiped on every restart**. Mount a volume to persist it.
+
+For persistent storage, mount a volume in `docker-compose.yml` (a named-volume variant ships commented-out in the file):
 
 ```yaml
 services:
   jsm-ha-notifier:
     volumes:
-      - ./data:/data
+      - ./data:/data   # host dir must be writable by uid 1000 (non-root user)
 ```
 
 ### API Endpoints
@@ -1054,14 +1114,20 @@ This confirms the image was built from this repository's GitHub Actions — not 
 
 #### Updating `docker-compose.yml` to use a published image
 
-After the image has been published, edit `docker-compose.yml`:
+After the image has been published, edit `docker-compose.yml`. Pin a specific
+release tag so `docker compose pull` never silently swaps the code under you:
 
 ```yaml
 services:
   jsm-ha-notifier:
-    image: ghcr.io/realdougeubanks/jsm-ha-notifier:latest
+    image: ghcr.io/realdougeubanks/jsm-ha-notifier:1.3.0
     # build: .   ← comment out or remove this line
 ```
+
+To update, bump the tag and re-run `docker compose up -d`. Floating tags
+(`:1.3`, `:1`, `:latest`) auto-update on pull — convenient, but you are
+trusting every future release; `:latest` is not recommended for unattended
+deployments.
 
 ---
 
@@ -1398,7 +1464,13 @@ jsm-ha-notifier/
 │       └── release.yml     # Build & push multi-arch Docker image to GHCR
 ├── src/
 │   ├── __init__.py
-│   ├── main.py             # FastAPI app, routes, signature verification
+│   ├── main.py             # Logging, app composition, lifespan
+│   ├── security.py         # Middleware, rate limiting, signature / API key auth
+│   ├── metrics.py          # Prometheus-compatible counters
+│   ├── routes/
+│   │   ├── ops.py          # /health, /healthz, /metrics, /status, /reload, /cache
+│   │   ├── incidents.py    # /incidents dashboard endpoints
+│   │   └── webhook.py      # /alert and /alert/{id}/acknowledge
 │   ├── config.py           # Pydantic settings (all from .env)
 │   ├── models.py           # JSM webhook payload models
 │   ├── jsm_client.py       # Async JSM Ops API client with caching

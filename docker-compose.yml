@@ -10,7 +10,13 @@
 
 services:
   jsm-ha-notifier:
-    image: ghcr.io/realdougeubanks/jsm-ha-notifier:latest
+    # Pinned to a specific release so `docker compose pull` never silently
+    # swaps the code under you (supply-chain safety).  To update, bump the
+    # tag to the new release and re-run `docker compose up -d`.
+    # Floating alternatives (opt-in, you accept auto-updates):
+    #   :1.3     follow patch releases      :1      follow minor releases
+    #   :latest  follow every release — NOT recommended
+    image: ghcr.io/realdougeubanks/jsm-ha-notifier:1.3.0
     container_name: jsm-ha-notifier
     restart: unless-stopped
 
@@ -47,3 +53,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+    # ── Incident dashboard persistence (optional) ────────────────────────
+    # The default INCIDENT_DB_PATH=/tmp/incidents.db lives on the tmpfs
+    # above, so incident history is ALWAYS wiped on container restart.
+    # To persist it, uncomment the volume below AND set in .env:
+    #   INCIDENT_DB_PATH=/data/incidents.db
+    # volumes:
+    #   - incident-data:/data
+
+# Uncomment together with the service volume above.
+# volumes:
+#   incident-data:

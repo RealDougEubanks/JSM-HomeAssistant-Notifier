@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] — 2026-06-12
+
+### Fixed
+
+- **`POST /reload` now genuinely re-applies settings** — previously it only swapped the API key / secret. It now updates the JSM and HA clients (credentials, URLs, announcement formats, volumes, emoji settings) in place via `update_config()`, recomputes derived config (media player routing, silent-override and TTS-repeat priorities) via `AlertProcessor.reapply_settings()`, and background loops (token check, incident sync, retention) read settings live so new intervals take effect on the next iteration. The docstring now states exactly what still requires a restart.
+- **Rate limiting moved to pre-auth middleware on every endpoint** — was previously applied only inside `/alert` and ran *after* API-key verification, leaving key brute-forcing and probing of `/healthz`, `/status`, etc. unthrottled. Now a `RateLimitMiddleware` throttles all requests before auth (`/health` exempt for the Docker healthcheck), configurable via `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (0 disables).
+- **Batch queue stranding race** — an alert enqueued while a flush was awaiting HA calls could be left in the queue with no timer and never announced. The timer now re-arms after flush if the queue is non-empty, and each flush snapshots its own notification coroutines.
+- **Batched TTS correctness** — batched announcements now honor terse mode (decided at flush time), use the terse volume, and apply the same shell-metacharacter/emoji sanitization as the single-alert path (previously used raw `alert.message`).
+- **Code hygiene** — removed a duplicate inner `datetime` import, replaced O(n log n) rate-bucket eviction on the hot path, fixed a false-positive pagination-cap warning in `JSMClient`, and removed a dead `isinstance` exception check.
+
+### Added
+
+- **`RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`** settings (default 60 req / 60 s).
+- **Startup security log line** — reports whether API key, HMAC signature, and rate limiting are enabled.
+- **Graceful incident-DB error** — a clear log message (instead of a stack trace) when the SQLite path is unwritable under the read-only rootfs.
+- **Regression tests** — reload re-application, pre-auth rate limiting, batch stranding, and batched-TTS sanitization.
+
+### Changed
+
+- **Refactored `src/main.py`** (≈970 → ≈310 lines) — routes split into `src/routes/{ops,incidents,webhook}.py`, middleware and auth helpers extracted to `src/security.py`, metrics to `src/metrics.py`. Shared state moved onto `app.state` instead of module globals, eliminating the class of reload bug above. No endpoint or behavior changes.
+- **Pinned the Docker image tag** in `docker-compose.yml` to a specific release (with floating-tag and digest-pin guidance) for supply-chain safety.
+- **Documentation** — corrected the HMAC/`WEBHOOK_SECRET` guidance (JSM cannot sign per-request; use `WEBHOOK_API_KEY` for direct JSM webhooks), added an API-key-in-URL leakage warning with reverse-proxy log-scrub examples, documented that the default incident DB is wiped on restart with a persistence-volume example, and added README badges + a table of contents.
+
 ## [2.2.0] — 2026-03-25
 
 ### Added

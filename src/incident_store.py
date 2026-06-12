@@ -63,9 +63,19 @@ class IncidentStore:
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.executescript(_SCHEMA)
+            try:
+                self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+                self._conn.row_factory = sqlite3.Row
+                self._conn.executescript(_SCHEMA)
+            except sqlite3.OperationalError:
+                self._conn = None
+                logger.error(
+                    "Cannot open incident database at %s — is the directory "
+                    "writable inside the container? (read_only rootfs: mount "
+                    "a volume, e.g. /data, and set INCIDENT_DB_PATH accordingly)",
+                    self._db_path,
+                )
+                raise
             logger.info("Incident store opened at %s", self._db_path)
         return self._conn
 
