@@ -145,6 +145,39 @@ class HAClient:
         """Close the underlying HTTP client.  Called during application shutdown."""
         await self._http.aclose()
 
+    def update_config(
+        self,
+        *,
+        ha_url: str,
+        ha_token: str,
+        media_player: str,
+        tts_service: str,
+        tts_language: str,
+        tts_voice: str,
+        notifier_label: str,
+        announcement_format: str,
+        terse_announcement_format: str,
+        volume_default: float | None,
+        volume_terse: float | None,
+        enable_emojis: bool,
+    ) -> None:
+        """Apply new settings in place (used by config hot-reload)."""
+        self.ha_url = ha_url.rstrip("/")
+        self.media_player = media_player
+        self.tts_service = tts_service
+        self.tts_language = tts_language
+        self.tts_voice = tts_voice
+        self.notifier_label = notifier_label
+        self.announcement_format = announcement_format
+        self.terse_announcement_format = terse_announcement_format
+        self.volume_default = volume_default
+        self.volume_terse = volume_terse
+        self.enable_emojis = enable_emojis
+        self._headers = {
+            "Authorization": f"Bearer {ha_token}",
+            "Content-Type": "application/json",
+        }
+
     # ── Message building ──────────────────────────────────────────────────
 
     def _clean(self, text: str) -> str:
@@ -344,17 +377,23 @@ class HAClient:
         alerts: list[Any],
         actions: list[str],
         *,
+        terse: bool = False,
         target_entity: str | None = None,
     ) -> bool:
         """Play a batched announcement for multiple alerts."""
         entity = target_entity or self.media_player
-        if self.volume_default is not None:
-            await self._set_volume(entity, self.volume_default)
+        volume = (
+            self.volume_terse
+            if terse and self.volume_terse is not None
+            else self.volume_default
+        )
+        if volume is not None:
+            await self._set_volume(entity, volume)
 
         parts = [f"{len(alerts)} new alerts."]
         for alert, action in zip(alerts, actions, strict=False):
             variables = self._format_vars(alert, action)
-            parts.append(f"{variables['priority']}: {alert.message}.")
+            parts.append(f"{variables['priority']}: {variables['message']}.")
 
         tts_text = " ".join(parts)
         content_id = self._build_tts_content_id(tts_text)

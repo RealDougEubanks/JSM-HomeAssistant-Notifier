@@ -80,14 +80,28 @@ class AlertProcessor:
         ha_client: HAClient,
         incident_store: IncidentStore | None = None,
     ) -> None:
-        self.settings = settings
         self.jsm_client = jsm_client
         self.ha_client = ha_client
         self.incident_store = incident_store
         # alert_key → epoch timestamp of last processing
         self._dedup_cache: dict[str, float] = {}
+        self.reapply_settings(settings)
 
-        # Parsed derived config.
+        # Batching state.
+        self._batch_queue: list[tuple[Any, str]] = []  # (alert, action)
+        self._batch_task: asyncio.Task[None] | None = None
+        self._batch_notif_coros: list[Any] = []  # persistent-notif coros to run
+
+        # TTS repeat state: alert_id → asyncio.Task
+        self._repeat_tasks: dict[str, asyncio.Task[None]] = {}
+
+    def reapply_settings(self, settings: Settings) -> None:
+        """Apply *settings* and recompute all derived configuration.
+
+        Called from ``__init__`` and from the ``/reload`` endpoint so that
+        hot-reloaded routing, window, and priority settings take effect.
+        """
+        self.settings = settings
         try:
             self._player_routes = parse_player_routing(settings.ha_media_player_routing)
         except ValueError as exc:
@@ -100,14 +114,6 @@ class AlertProcessor:
             settings.silent_window_override_priorities
         )
         self._repeat_priorities = _parse_priority_set(settings.tts_repeat_priorities)
-
-        # Batching state.
-        self._batch_queue: list[tuple[Any, str]] = []  # (alert, action)
-        self._batch_task: asyncio.Task[None] | None = None
-        self._batch_notif_coros: list[Any] = []  # persistent-notif coros to run
-
-        # TTS repeat state: alert_id → asyncio.Task
-        self._repeat_tasks: dict[str, asyncio.Task[None]] = {}
 
     # ── Deduplication ─────────────────────────────────────────────────────
 
@@ -298,30 +304,34 @@ class AlertProcessor:
         alerts = [a for a, _ in self._batch_queue]
         actions = [act for _, act in self._batch_queue]
         self._batch_queue.clear()
+        notif_coros = self._batch_notif_coros[: len(alerts)]
+        del self._batch_notif_coros[: len(alerts)]
 
         target_entity = self._resolve_media_player()
+        # Decide verbosity at flush time — the terse window may have started
+        # (or ended) between enqueue and flush.
+        terse = in_any_window(datetime.now().time(), self.settings._terse_windows)
 
         # Fire persistent notifications (one per alert).
-        if self._batch_notif_coros:
-            results = await asyncio.gather(
-                *self._batch_notif_coros, return_exceptions=True
-            )
+        if notif_coros:
+            results = await asyncio.gather(*notif_coros, return_exceptions=True)
             for r in results:
                 if isinstance(r, Exception):
                     logger.error("Batch persistent notification raised: %s", r)
-            self._batch_notif_coros.clear()
 
         # Single batched TTS.
         if len(alerts) == 1:
             await self.ha_client.play_tts_alert(
                 alerts[0],
                 actions[0],
+                terse=terse,
                 target_entity=target_entity,
             )
         else:
             await self.ha_client.play_tts_batch(
                 alerts,
                 actions,
+                terse=terse,
                 target_entity=target_entity,
             )
 
@@ -330,7 +340,6 @@ class AlertProcessor:
             if self._should_repeat(alert.priority):
                 self._start_tts_repeat(alert, action, target_entity)
 
-        self._batch_task = None
         logger.info("Flushed batch of %d alert(s)", len(alerts))
 
     def _enqueue_batch(
@@ -350,6 +359,12 @@ class AlertProcessor:
         """Wait for the batch window, then flush."""
         await asyncio.sleep(self.settings.alert_batch_window_seconds)
         await self._flush_batch()
+        self._batch_task = None
+        # An alert may have been enqueued while the flush awaited HA calls —
+        # _enqueue_batch saw this timer still running and did not start a new
+        # one, so re-arm here or that alert would be stranded indefinitely.
+        if self._batch_queue:
+            self._batch_task = asyncio.create_task(self._batch_timer())
 
     # ── HA automation webhooks ───────────────────────────────────────────
 
@@ -505,9 +520,7 @@ class AlertProcessor:
 
         if silent:
             # Only persistent notification, no TTS / batching.
-            notif_result = await notif_coro
-            if isinstance(notif_result, Exception):
-                logger.error("Persistent notification raised: %s", notif_result)
+            await notif_coro
         elif batch_window > 0:
             # Batching mode: queue the alert for combined announcement.
             self._enqueue_batch(payload.alert, payload.action, notif_coro)

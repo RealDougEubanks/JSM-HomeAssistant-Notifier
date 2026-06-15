@@ -125,6 +125,79 @@ async def test_flush_batch_starts_repeat():
     assert alert.alertId in proc._repeat_tasks
 
 
+@pytest.mark.asyncio
+async def test_alert_enqueued_mid_flush_is_not_stranded():
+    """An alert arriving while a flush is in progress must still be announced."""
+    s = _settings(alert_batch_window_seconds=0)
+    proc = _processor(s)
+    a1 = make_alert(alert_id="mid-1").alert
+    a2 = make_alert(alert_id="mid-2").alert
+
+    flush_started = asyncio.Event()
+    release_flush = asyncio.Event()
+
+    async def _slow_tts(*args, **kwargs):
+        flush_started.set()
+        await release_flush.wait()
+        return True
+
+    proc.ha_client.play_tts_alert = AsyncMock(side_effect=_slow_tts)
+
+    proc._enqueue_batch(
+        a1, "Create", proc.ha_client.send_persistent_notification(a1, "Create")
+    )
+    await flush_started.wait()  # flush of a1 is now blocked inside HA call
+
+    # a2 arrives mid-flush: timer task is still running, so no new timer starts.
+    proc._enqueue_batch(
+        a2, "Create", proc.ha_client.send_persistent_notification(a2, "Create")
+    )
+    release_flush.set()
+
+    # The timer must re-arm and eventually flush a2.
+    for _ in range(100):
+        if not proc._batch_queue and proc._batch_task is None:
+            break
+        await asyncio.sleep(0.02)
+    assert not proc._batch_queue, "alert enqueued mid-flush was stranded"
+    announced_ids = {
+        call.args[0].alertId for call in proc.ha_client.play_tts_alert.call_args_list
+    }
+    assert announced_ids == {"mid-1", "mid-2"}
+
+
+@pytest.mark.asyncio
+async def test_play_tts_batch_sanitizes_message_and_uses_terse_volume():
+    """Batched TTS must use sanitized text and the terse volume when terse."""
+    ha = HAClient(
+        ha_url="https://ha.example.com",
+        ha_token="tok",
+        media_player="media_player.test",
+        tts_service="tts.cloud",
+        tts_language="en-US",
+        tts_voice="JennyNeural",
+        volume_default=0.5,
+        volume_terse=0.2,
+    )
+    ha._call_service = AsyncMock(return_value=True)
+    a1 = make_alert(alert_id="b1", message="disk full `rm -rf` $(boom)").alert
+    a2 = make_alert(alert_id="b2").alert
+
+    await ha.play_tts_batch([a1, a2], ["Create", "Create"], terse=True)
+
+    calls = ha._call_service.call_args_list
+    # First call sets the terse volume.
+    assert calls[0].args[1] == "volume_set"
+    assert calls[0].args[2]["volume_level"] == 0.2
+    # TTS content must not contain shell metacharacters from the alert text.
+    content_id = calls[1].args[2]["media_content_id"]
+    import urllib.parse
+
+    decoded = urllib.parse.unquote(content_id)
+    for ch in "`$()":
+        assert ch not in decoded.split("?message=")[1].split("&")[0]
+
+
 # ── Enqueue batch ────────────────────────────────────────────────────────────
 
 

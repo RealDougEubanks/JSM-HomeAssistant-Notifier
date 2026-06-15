@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     ha_notifier_label: str = "JSM Alert Notifier"
 
     # ── Webhook security ─────────────────────────────────────────────────────
+    # Per-IP rate limit applied to every endpoint except /health.
+    # rate_limit_requests = max requests per window; 0 disables rate limiting.
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
     webhook_secret: str = ""
     # Optional API key passed as a ?key= query parameter on webhook URLs.
     # If set, every inbound request to /alert (and /alert/{id}/acknowledge)
@@ -257,6 +261,37 @@ class Settings(BaseSettings):
         object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
         object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
         return self
+
+    # ── Client construction mappings ─────────────────────────────────────────
+    # Used both at startup and by /reload to apply settings to the clients.
+    def jsm_client_kwargs(self) -> dict[str, Any]:
+        return {
+            "api_url": self.jsm_api_url,
+            "cloud_id": self.jsm_cloud_id,
+            "username": self.jsm_username,
+            "api_token": self.jsm_api_token,
+            "my_user_id": self.jsm_my_user_id,
+        }
+
+    def ha_client_kwargs(self) -> dict[str, Any]:
+        return {
+            "ha_url": self.ha_url,
+            "ha_token": self.ha_token,
+            "media_player": self.ha_media_player_entity,
+            "tts_service": self.ha_tts_service,
+            "tts_language": self.ha_tts_language,
+            "tts_voice": self.ha_tts_voice,
+            "notifier_label": self.ha_notifier_label,
+            "announcement_format": self.announcement_format,
+            "terse_announcement_format": self.terse_announcement_format,
+            "volume_default": (
+                float(self.ha_volume_default) if self.ha_volume_default else None
+            ),
+            "volume_terse": (
+                float(self.ha_volume_terse) if self.ha_volume_terse else None
+            ),
+            "enable_emojis": self.enable_emojis,
+        }
 
     # ── Custom sources ────────────────────────────────────────────────────────
     @classmethod
