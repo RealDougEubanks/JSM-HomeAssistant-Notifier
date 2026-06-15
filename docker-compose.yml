@@ -3,20 +3,27 @@
 #
 # Quickstart:
 #   1. cp .env.example .env  and fill in your values
-#   2. docker compose up -d
+#   2. docker compose up -d          (builds the image automatically)
 #
-# To build locally instead of pulling from GHCR, swap the `image:` line for:
-#   build: .
+# To use a pre-built GHCR image instead of building locally, comment out
+# the `build:` / `image: jsm-ha-notifier:latest` lines and uncomment the
+# `image: ghcr.io/...` line, then run `docker compose pull && docker compose up -d`.
 
 services:
   jsm-ha-notifier:
-    # Pinned to a specific release so `docker compose pull` never silently
-    # swaps the code under you (supply-chain safety).  To update, bump the
-    # tag to the new release and re-run `docker compose up -d`.
-    # Floating alternatives (opt-in, you accept auto-updates):
-    #   :1.3     follow patch releases      :1      follow minor releases
-    #   :latest  follow every release — NOT recommended
-    image: ghcr.io/realdougeubanks/jsm-ha-notifier:1.3.0
+    # ── Local build (default — use this when developing or self-hosting) ──
+    # Run `docker build -t jsm-ha-notifier .` first, or let compose build
+    # automatically by keeping the `build:` line.  This is what you want
+    # when no published GHCR image exists yet for the current code.
+    build: .
+    image: jsm-ha-notifier:latest
+
+    # ── Published GHCR image (swap in for production / unattended hosts) ──
+    # Pin to a specific release so `docker compose pull` never silently
+    # swaps the code under you (supply-chain safety).  Comment out the two
+    # lines above and uncomment the one below, bumping the tag each release.
+    # Floating alternatives: :2.3  (minor) or :2  (major) for auto-updates.
+    # image: ghcr.io/realdougeubanks/jsm-ha-notifier:2.3.0
     container_name: jsm-ha-notifier
     restart: unless-stopped
 
