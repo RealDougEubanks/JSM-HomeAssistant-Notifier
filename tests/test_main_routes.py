@@ -235,7 +235,9 @@ async def test_api_key_required_when_set(client):
         )
         assert resp.status_code == 404
     finally:
-        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"webhook_api_key": ""}
+        )
 
 
 # ── Webhook signature ────────────────────────────────────────────────────────
@@ -255,7 +257,9 @@ async def test_signature_required_when_set(client):
         )
         assert resp.status_code == 401
     finally:
-        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_secret": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"webhook_secret": ""}
+        )
 
 
 # ── Deep health check ────────────────────────────────────────────────────────
@@ -362,7 +366,9 @@ async def test_deep_health_api_key_required(client):
             resp = await client.get("/healthz?key=secret123")
             assert resp.status_code == 200
     finally:
-        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"webhook_api_key": ""}
+        )
 
 
 # ── On-call status ───────────────────────────────────────────────────────────
@@ -410,8 +416,7 @@ async def test_rate_limit_throttles_invalid_key_requests(client):
     )
     try:
         statuses = [
-            (await client.get("/status?key=wrong-guess")).status_code
-            for _ in range(8)
+            (await client.get("/status?key=wrong-guess")).status_code for _ in range(8)
         ]
         assert statuses[:5] == [404] * 5  # stealth 404 for bad key
         assert statuses[5:] == [429] * 3  # then throttled
@@ -501,9 +506,7 @@ async def test_reload_applies_derived_settings(client, monkeypatch):
     main_mod.app.state.last_reload = 0.0  # reset cooldown
     monkeypatch.setenv("TTS_REPEAT_PRIORITIES", "P1,P2")
     monkeypatch.setenv("TTS_REPEAT_INTERVAL_SECONDS", "30")
-    monkeypatch.setenv(
-        "HA_MEDIA_PLAYER_ROUTING", "media_player.office@00:00-23:59"
-    )
+    monkeypatch.setenv("HA_MEDIA_PLAYER_ROUTING", "media_player.office@00:00-23:59")
     monkeypatch.setenv("HA_TTS_VOICE", "AriaNeural")
 
     resp = await client.post("/reload")
@@ -533,4 +536,6 @@ async def test_reload_requires_api_key(client):
         resp = await client.post("/reload?key=reloadkey")
         assert resp.status_code == 200
     finally:
-        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(update={"webhook_api_key": ""})
+        main_mod.app.state.settings = main_mod.app.state.settings.model_copy(
+            update={"webhook_api_key": ""}
+        )

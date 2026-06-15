@@ -186,7 +186,9 @@ def verify_signature(settings, request: Request, body: bytes) -> bool:  # noqa: 
         return False
 
 
-def verify_api_key(settings, key: str | None, request: Request | None = None) -> bool:  # noqa: ANN001
+def verify_api_key(
+    settings, key: str | None, request: Request | None = None
+) -> bool:  # noqa: ANN001
     """
     Verify the API key from any of three sources (checked in order):
 

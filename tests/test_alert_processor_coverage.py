@@ -143,11 +143,15 @@ async def test_alert_enqueued_mid_flush_is_not_stranded():
 
     proc.ha_client.play_tts_alert = AsyncMock(side_effect=_slow_tts)
 
-    proc._enqueue_batch(a1, "Create", proc.ha_client.send_persistent_notification(a1, "Create"))
+    proc._enqueue_batch(
+        a1, "Create", proc.ha_client.send_persistent_notification(a1, "Create")
+    )
     await flush_started.wait()  # flush of a1 is now blocked inside HA call
 
     # a2 arrives mid-flush: timer task is still running, so no new timer starts.
-    proc._enqueue_batch(a2, "Create", proc.ha_client.send_persistent_notification(a2, "Create"))
+    proc._enqueue_batch(
+        a2, "Create", proc.ha_client.send_persistent_notification(a2, "Create")
+    )
     release_flush.set()
 
     # The timer must re-arm and eventually flush a2.
