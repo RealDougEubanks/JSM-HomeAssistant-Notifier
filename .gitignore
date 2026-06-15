@@ -3,6 +3,9 @@
 *.env
 !.env.example
 
+# ── Local Docker Compose overrides (machine-specific, never committed) ────────
+docker-compose.override.yml
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
