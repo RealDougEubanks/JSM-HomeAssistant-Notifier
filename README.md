@@ -660,59 +660,35 @@ curl -s -X POST "$URL" -H "Content-Type: application/json" \
 
 ## HA Automation Webhooks
 
-The notifier can fire Home Assistant webhook triggers on each alert event, enabling you to control lights, scenes, scripts, or any HA automation in response to incidents.
+The notifier fires Home Assistant webhook triggers when alert state changes, letting you control lights, scenes, scripts, or any HA automation in response to incidents.
 
-### How It Works
+### State Machine — How Webhook Firing Works
 
-1. You define an HA automation with a `webhook` trigger
-2. You set the webhook ID in the notifier's `.env` file
-3. When the matching event occurs, the notifier POSTs the alert data to HA
-4. Your automation receives the data as `trigger.json.*` variables
+The three main webhooks (`ON_CREATE`, `ON_ACKNOWLEDGE`, `ON_CLOSE`) reflect the **aggregate state of all open incidents**, not just the individual event that arrived. The notifier updates its incident store first, then fires the webhook that matches the current totals:
 
-### Step-by-Step Setup
+| Aggregate state | Webhook fired | Example light color |
+|---|---|---|
+| Any open, **unacknowledged** alert | `HA_WEBHOOK_ON_CREATE` | 🔴 Red |
+| All open alerts are **acknowledged** (none unacked) | `HA_WEBHOOK_ON_ACKNOWLEDGE` | 🟡 Yellow |
+| **No open alerts** at all | `HA_WEBHOOK_ON_CLOSE` | 🟢 Green / off |
 
-#### 1. Create an HA automation
+Key implications:
 
-```yaml
-# automations.yaml
-- alias: "Flash office light red on P1 alert"
-  trigger:
-    - platform: webhook
-      webhook_id: "jsm_alert_created"
-      allowed_methods: [POST]
-      local_only: true
-  condition:
-    - condition: template
-      value_template: "{{ trigger.json.priority == 'P1' }}"
-  action:
-    - service: light.turn_on
-      target:
-        entity_id: light.office_desk
-      data:
-        color_name: red
-        brightness: 255
-        flash: long
-    - delay: "00:00:10"
-    - service: light.turn_on
-      target:
-        entity_id: light.office_desk
-      data:
-        color_name: white
-```
+- **UnAcknowledge** automatically drives the light back to red — no extra config is needed.
+- If alert A is acknowledged but alert B is still unacked, the light stays red until both are acked.
+- If alert A closes while alert B is still acked-open, the light stays yellow until B closes too.
+- The payload always includes `unacked_count`, `acked_count`, and `total_open` so your automations can show counts if you want.
 
-#### 2. Set the webhook ID in `.env`
+Per-event webhooks (`ON_ESCALATE`, `ON_UPDATE`, `ON_SLA_BREACH`) fire for that specific action regardless of aggregate state — useful for flashing a light on escalation without changing the color it holds.
 
-```env
-HA_WEBHOOK_ON_CREATE=jsm_alert_created
-```
+### Trigger Variables
 
-#### 3. Available trigger variables
-
-In your HA automation templates, access the alert data via:
+Every webhook POST includes these fields accessible as `trigger.json.*` in your HA templates:
 
 | Variable | Description |
 |---|---|
-| `trigger.json.event` | Action name (`Create`, `EscalateNext`, etc.) |
+| `trigger.json.event` | JSM action that triggered the state change (`Create`, `Acknowledge`, `UnAcknowledge`, `Close`, …) |
+| `trigger.json.state` | Aggregate state: `create`, `acknowledge`, or `close` |
 | `trigger.json.alert_id` | Unique alert identifier |
 | `trigger.json.message` | Alert title / summary |
 | `trigger.json.priority` | `P1`–`P5` |
@@ -720,113 +696,247 @@ In your HA automation templates, access the alert data via:
 | `trigger.json.description` | First 200 chars of description |
 | `trigger.json.source` | Alert source |
 | `trigger.json.tags` | List of tags |
+| `trigger.json.unacked_count` | Number of unacknowledged open alerts |
+| `trigger.json.acked_count` | Number of acknowledged open alerts |
+| `trigger.json.total_open` | Total open alerts (unacked + acked) |
 
-### Example HA Automations
+> `state`, `unacked_count`, `acked_count`, and `total_open` are only present on state webhooks (`ON_CREATE` / `ON_ACKNOWLEDGE` / `ON_CLOSE`), not on per-event webhooks.
 
-#### Flash all lights on escalation
+### `.env` Configuration
+
+```env
+# State webhooks — drive your status light
+HA_WEBHOOK_ON_CREATE=jsm_state_unacked       # any unacked alert → red
+HA_WEBHOOK_ON_ACKNOWLEDGE=jsm_state_acked    # all open alerts acked → yellow
+HA_WEBHOOK_ON_CLOSE=jsm_state_clear         # no open alerts → green/off
+
+# Per-event webhooks — optional, fire regardless of aggregate state
+HA_WEBHOOK_ON_ESCALATE=jsm_escalation
+HA_WEBHOOK_ON_UPDATE=jsm_alert_updated
+HA_WEBHOOK_ON_SLA_BREACH=jsm_sla_breached
+```
+
+Comma-separate multiple IDs to fire several automations from one event:
+
+```env
+HA_WEBHOOK_ON_CREATE=jsm_state_unacked,flash_office_lights,mobile_critical_push
+```
+
+### Example: Bias Light Behind Your Monitor
+
+This pattern sets a wall bias light red/yellow/green based on incident state. Three automations share one webhook each.
+
+#### Step 1 — Create an HA helper to track state
+
+In HA, go to **Settings → Devices & Services → Helpers → Create → Dropdown** and create:
+
+- **Name:** `JSM Alert State`
+- **Entity ID:** `input_select.jsm_alert_state`
+- **Options:** `clear`, `acknowledged`, `unacked`
+
+This helper tracks the true incident state independently of whether the light is on or off. It is the source of truth used when the light is turned back on after being manually switched off.
+
+#### Step 2 — Three automations, one per state
 
 ```yaml
-- alias: "Flash all lights on escalation"
+# automations.yaml
+
+# ── Unacked alert → red ───────────────────────────────────────────────────────
+- alias: "JSM — unacked alert, bias light red"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_state_unacked"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    # Always update the helper so light-on restore works correctly.
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.jsm_alert_state
+      data:
+        option: unacked
+    # Only change the light if it is already on — avoids turning it on
+    # in a dark room during off-hours. Remove this condition if you always
+    # want the light to turn on for new alerts.
+    - condition: state
+      entity_id: light.bias_light
+      state: "on"
+    - service: light.turn_on
+      target:
+        entity_id: light.bias_light
+      data:
+        rgb_color: [255, 0, 0]
+        brightness_pct: 100
+
+# ── All open alerts acked → yellow ───────────────────────────────────────────
+- alias: "JSM — all alerts acked, bias light yellow"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_state_acked"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.jsm_alert_state
+      data:
+        option: acknowledged
+    - condition: state
+      entity_id: light.bias_light
+      state: "on"
+    - service: light.turn_on
+      target:
+        entity_id: light.bias_light
+      data:
+        rgb_color: [255, 200, 0]
+        brightness_pct: 80
+
+# ── No open alerts → green then off ──────────────────────────────────────────
+- alias: "JSM — no open alerts, bias light green then off"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_state_clear"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.jsm_alert_state
+      data:
+        option: clear
+    - condition: state
+      entity_id: light.bias_light
+      state: "on"
+    - service: light.turn_on
+      target:
+        entity_id: light.bias_light
+      data:
+        rgb_color: [0, 200, 0]
+        brightness_pct: 60
+    - delay: "00:00:30"
+    - service: light.turn_off
+      target:
+        entity_id: light.bias_light
+```
+
+#### Step 3 — Restore light state when turned on
+
+When someone manually switches the light off during an active incident, the helper still holds the correct state. This automation re-applies the right color whenever the light is turned on:
+
+```yaml
+- alias: "JSM — restore bias light color on turn-on"
+  trigger:
+    - platform: state
+      entity_id: light.bias_light
+      to: "on"
+  action:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_select.jsm_alert_state
+              state: unacked
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.bias_light
+              data:
+                rgb_color: [255, 0, 0]
+                brightness_pct: 100
+        - conditions:
+            - condition: state
+              entity_id: input_select.jsm_alert_state
+              state: acknowledged
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.bias_light
+              data:
+                rgb_color: [255, 200, 0]
+                brightness_pct: 80
+      # No default — if state is "clear", leave the light at whatever
+      # color/brightness it was turned on with (manual use).
+```
+
+> **How the restore works:** The webhook automations always write to `input_select.jsm_alert_state` before touching the light, even when the "light is on" condition prevents a color change. So the helper always reflects reality. When the light is switched on later, the restore automation reads the helper and sets the correct color immediately.
+
+#### Variations
+
+**Always turn the light on for new alerts (no "if on" condition):**
+
+Remove or comment out the `condition:` block in the red automation. The light will turn on in a dark room whenever a new alert arrives.
+
+**Show the open alert count on a display:**
+
+```yaml
+- alias: "JSM — update alert count badge"
+  trigger:
+    - platform: webhook
+      webhook_id: "jsm_state_unacked"
+      allowed_methods: [POST]
+      local_only: true
+  action:
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.jsm_open_count
+      data:
+        value: "{{ trigger.json.total_open }}"
+```
+
+**Flash on escalation without changing the color the light is holding:**
+
+```yaml
+- alias: "JSM — flash bias light on escalation"
   trigger:
     - platform: webhook
       webhook_id: "jsm_escalation"
       allowed_methods: [POST]
       local_only: true
   action:
+    - condition: state
+      entity_id: light.bias_light
+      state: "on"
     - service: light.turn_on
       target:
-        entity_id: all
+        entity_id: light.bias_light
       data:
         flash: long
-        color_name: red
 ```
 
 ```env
 HA_WEBHOOK_ON_ESCALATE=jsm_escalation
 ```
 
-#### Turn status light green on resolution
+**Priority-based colors on the ON_CREATE state:**
 
 ```yaml
-- alias: "Status light green on resolve"
+- alias: "JSM — unacked alert, priority-colored bias light"
   trigger:
     - platform: webhook
-      webhook_id: "jsm_alert_resolved"
+      webhook_id: "jsm_state_unacked"
       allowed_methods: [POST]
       local_only: true
   action:
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.jsm_alert_state
+      data:
+        option: unacked
+    - condition: state
+      entity_id: light.bias_light
+      state: "on"
     - service: light.turn_on
       target:
-        entity_id: light.status_indicator
+        entity_id: light.bias_light
       data:
-        color_name: green
-        brightness: 200
-    - delay: "00:01:00"
-    - service: light.turn_off
-      target:
-        entity_id: light.status_indicator
-```
-
-```env
-HA_WEBHOOK_ON_CLOSE=jsm_alert_resolved
-```
-
-#### Flash yellow on SLA breach
-
-```yaml
-- alias: "SLA breach warning"
-  trigger:
-    - platform: webhook
-      webhook_id: "jsm_sla_breached"
-      allowed_methods: [POST]
-      local_only: true
-  action:
-    - service: light.turn_on
-      target:
-        entity_id: light.office_desk
-      data:
-        color_name: yellow
-        flash: short
-```
-
-```env
-HA_WEBHOOK_ON_SLA_BREACH=jsm_sla_breached
-```
-
-#### Priority-based color coding
-
-```yaml
-- alias: "Color code by priority"
-  trigger:
-    - platform: webhook
-      webhook_id: "jsm_alert_created"
-      allowed_methods: [POST]
-      local_only: true
-  action:
-    - service: light.turn_on
-      target:
-        entity_id: light.status_indicator
-      data:
-        brightness: 255
+        brightness_pct: 100
         rgb_color: >
           {% if trigger.json.priority == 'P1' %}
             [255, 0, 0]
           {% elif trigger.json.priority == 'P2' %}
-            [255, 165, 0]
-          {% elif trigger.json.priority == 'P3' %}
-            [255, 255, 0]
+            [255, 80, 0]
           {% else %}
-            [0, 255, 0]
+            [255, 200, 0]
           {% endif %}
-```
-
-#### Multiple webhooks per event
-
-You can fire multiple webhooks for a single event:
-
-```env
-HA_WEBHOOK_ON_CREATE=jsm_alert_created,flash_office_lights,send_mobile_notification
-HA_WEBHOOK_ON_ESCALATE=jsm_escalation,flash_all_lights,play_siren
 ```
 
 ---

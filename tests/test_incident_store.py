@@ -147,6 +147,7 @@ def _settings(**kwargs) -> Settings:
 
 
 async def test_fire_webhooks_on_create():
+    """State webhook fires ON_CREATE when an unacked alert exists."""
     settings = _settings(ha_webhook_on_create="jsm_alert_created")
     ha = HAClient(
         ha_url=settings.ha_url,
@@ -162,9 +163,14 @@ async def test_fire_webhooks_on_create():
 
     jsm = MagicMock(spec=JSMClient)
     proc = AlertProcessor(settings, jsm, ha)
+    # Stub the store so get_open_counts returns one unacked alert.
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
 
     payload = make_alert(action="Create")
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
 
     ha.fire_webhook.assert_called_once()
     call_args = ha.fire_webhook.call_args
@@ -174,6 +180,7 @@ async def test_fire_webhooks_on_create():
 
 
 async def test_fire_webhooks_skips_when_empty():
+    """No webhook fires when config field is empty."""
     settings = _settings()  # All webhook configs empty.
     ha = HAClient(
         ha_url=settings.ha_url,
@@ -187,14 +194,19 @@ async def test_fire_webhooks_skips_when_empty():
 
     jsm = MagicMock(spec=JSMClient)
     proc = AlertProcessor(settings, jsm, ha)
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
 
     payload = make_alert(action="Create")
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
 
     ha.fire_webhook.assert_not_called()
 
 
 async def test_fire_webhooks_on_sla_breach():
+    """SLA breach fires per-event webhook, not a state webhook."""
     settings = _settings(ha_webhook_on_sla_breach="sla_breach_hook")
     ha = HAClient(
         ha_url=settings.ha_url,
@@ -210,7 +222,7 @@ async def test_fire_webhooks_on_sla_breach():
     proc = AlertProcessor(settings, jsm, ha)
 
     payload = make_alert(action="SlaBreached")
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_event_webhooks(payload)
 
     ha.fire_webhook.assert_called_once_with(
         "sla_breach_hook",
@@ -249,6 +261,7 @@ async def test_process_updates_incident_store():
     jsm.get_alert_details = AsyncMock(return_value=None)
     store = MagicMock(spec=IncidentStore)
     store.upsert = AsyncMock()
+    store.get_open_counts = AsyncMock(return_value={"unacked": 1, "acked": 0, "total_open": 1})
 
     proc = AlertProcessor(settings, jsm, ha, store)
 

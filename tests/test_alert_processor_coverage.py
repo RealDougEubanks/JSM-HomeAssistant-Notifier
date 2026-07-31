@@ -258,41 +258,107 @@ async def test_repeat_tts_loop_cancelled():
     assert alert.alertId not in proc._repeat_tasks
 
 
-# ── Automation webhooks ──────────────────────────────────────────────────────
+# ── State webhooks ───────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_fire_automation_webhooks_configured():
-    """Webhooks should fire when configured for the action."""
+async def test_fire_state_webhooks_unacked_fires_create():
+    """With unacked alerts in the store, ON_CREATE webhook fires (red)."""
     s = _settings(ha_webhook_on_create="my_hook")
     proc = _processor(s)
+    # Stub the store to report one unacked alert.
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
     payload = make_alert()
 
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
     proc.ha_client.fire_webhooks.assert_called_once()
     call_args = proc.ha_client.fire_webhooks.call_args
     assert call_args[0][0] == "my_hook"
     assert call_args[0][1]["event"] == "Create"
+    assert call_args[0][1]["state"] == "create"
 
 
 @pytest.mark.asyncio
-async def test_fire_automation_webhooks_not_configured():
-    """No webhooks should fire when not configured."""
+async def test_fire_state_webhooks_all_acked_fires_acknowledge():
+    """With all alerts acked, ON_ACKNOWLEDGE webhook fires (yellow)."""
+    s = _settings(ha_webhook_on_acknowledge="ack_hook")
+    proc = _processor(s)
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 0, "acked": 2, "total_open": 2}
+    )
+    payload = make_alert(action="Acknowledge")
+
+    await proc._fire_state_webhooks(payload)
+    proc.ha_client.fire_webhooks.assert_called_once()
+    assert proc.ha_client.fire_webhooks.call_args[0][0] == "ack_hook"
+    assert proc.ha_client.fire_webhooks.call_args[0][1]["state"] == "acknowledge"
+
+
+@pytest.mark.asyncio
+async def test_fire_state_webhooks_none_open_fires_close():
+    """With no open alerts, ON_CLOSE webhook fires (green/off)."""
+    s = _settings(ha_webhook_on_close="close_hook")
+    proc = _processor(s)
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 0, "acked": 0, "total_open": 0}
+    )
+    payload = make_alert(action="Close")
+
+    await proc._fire_state_webhooks(payload)
+    proc.ha_client.fire_webhooks.assert_called_once()
+    assert proc.ha_client.fire_webhooks.call_args[0][0] == "close_hook"
+    assert proc.ha_client.fire_webhooks.call_args[0][1]["state"] == "close"
+
+
+@pytest.mark.asyncio
+async def test_fire_state_webhooks_not_configured():
+    """No webhooks fire when the matching config field is empty."""
     proc = _processor()
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
     payload = make_alert()
 
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
     proc.ha_client.fire_webhooks.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_fire_automation_webhooks_unknown_action():
-    """Unknown actions should not fire any webhook."""
+async def test_fire_state_webhooks_non_state_action_skipped():
+    """AddNote is not a state action — no state webhook fires."""
     s = _settings(ha_webhook_on_create="my_hook")
     proc = _processor(s)
-    payload = make_alert(action="UnknownAction")
+    payload = make_alert(action="AddNote")
 
-    await proc._fire_automation_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
+    proc.ha_client.fire_webhooks.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fire_event_webhooks_configured():
+    """Per-event webhook fires for SLA breach."""
+    s = _settings(ha_webhook_on_sla_breach="sla_hook")
+    proc = _processor(s)
+    payload = make_alert(action="SlaBreached")
+
+    await proc._fire_event_webhooks(payload)
+    proc.ha_client.fire_webhooks.assert_called_once()
+    assert proc.ha_client.fire_webhooks.call_args[0][0] == "sla_hook"
+
+
+@pytest.mark.asyncio
+async def test_fire_event_webhooks_not_configured():
+    """No event webhook fires when not configured."""
+    proc = _processor()
+    payload = make_alert(action="SlaBreached")
+
+    await proc._fire_event_webhooks(payload)
     proc.ha_client.fire_webhooks.assert_not_called()
 
 

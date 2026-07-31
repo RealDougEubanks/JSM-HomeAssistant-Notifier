@@ -206,10 +206,22 @@ class Settings(BaseSettings):
     token_check_interval_hours: int = 24
 
     # ── HA automation webhooks ────────────────────────────────────────────
-    # Webhook IDs fired on HA for specific alert lifecycle events.
-    # These trigger HA automations (flash lights, change colors, etc.).
-    # Each value is a webhook ID or comma-separated list of webhook IDs.
+    # Webhook IDs fired on HA for alert lifecycle events.
+    # Each value is a single webhook ID or a comma-separated list.
     # Leave empty to disable.
+    #
+    # State webhooks (fired based on AGGREGATE open-incident state, after the
+    # incident store is updated — use these for a status light):
+    #   ON_CREATE      → any unacked open alert exists  (e.g. red)
+    #   ON_ACKNOWLEDGE → all open alerts are acked, none unacked  (e.g. yellow)
+    #   ON_CLOSE       → no open alerts remain  (e.g. green / off)
+    # UnAcknowledge automatically drives ON_CREATE (back to red) — no
+    # separate config field is needed.
+    #
+    # Per-event webhooks (fired for that specific action regardless of state):
+    #   ON_ESCALATE    → EscalateNext action
+    #   ON_UPDATE      → AddNote, AssignOwnership, Seen, UnAcknowledge
+    #   ON_SLA_BREACH  → SlaBreached action
     ha_webhook_on_create: str = ""
     ha_webhook_on_escalate: str = ""
     ha_webhook_on_acknowledge: str = ""
