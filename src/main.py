@@ -128,6 +128,23 @@ def _build_app() -> FastAPI:
             settings.incident_db_path,
             settings.incident_sync_interval_minutes,
         )
+    elif any(
+        (
+            settings.ha_webhook_on_create,
+            settings.ha_webhook_on_acknowledge,
+            settings.ha_webhook_on_close,
+        )
+    ):
+        # State webhooks need the incident store to count open/acked alerts.
+        # Without it they degrade to per-event firing, which misbehaves when
+        # more than one alert is open at a time.
+        logger.warning(
+            "State webhooks are configured but INCIDENT_DASHBOARD_ENABLED=false — "
+            "aggregate state cannot be computed, so ON_CREATE/ON_ACKNOWLEDGE/"
+            "ON_CLOSE will fire per-event instead. With multiple concurrent "
+            "alerts a status light will show the wrong state. Set "
+            "INCIDENT_DASHBOARD_ENABLED=true to enable accurate state tracking."
+        )
 
     processor = AlertProcessor(settings, jsm_client, ha_client, incident_store)
 

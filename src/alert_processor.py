@@ -55,12 +55,16 @@ _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 # after the incident store is updated so the light reflects the new totals.
 _STATE_ACTIONS = {"Create", "Acknowledge", "UnAcknowledge", "Close", "EscalateNext"}
 
-# Per-event webhooks for actions that do NOT change open/acked state.
-# These fire immediately (before the upsert) because they don't need DB state.
+# Per-event webhooks, fired for the specific action regardless of aggregate
+# state.  EscalateNext and UnAcknowledge appear here AND in _STATE_ACTIONS:
+# they get their own event webhook (e.g. flash the light) and also update the
+# aggregate state webhook (e.g. the colour the light holds).
 _EVENT_WEBHOOK_MAP: dict[str, str] = {
+    "EscalateNext": "ha_webhook_on_escalate",
     "AddNote": "ha_webhook_on_update",
     "AssignOwnership": "ha_webhook_on_update",
     "Seen": "ha_webhook_on_update",
+    "UnAcknowledge": "ha_webhook_on_update",
     "SlaBreached": "ha_webhook_on_sla_breach",
 }
 
@@ -368,7 +372,9 @@ class AlertProcessor:
 
     # ── HA automation webhooks ───────────────────────────────────────────
 
-    def _alert_webhook_data(self, payload: JSMWebhookPayload, extra: dict | None = None) -> dict:
+    def _alert_webhook_data(
+        self, payload: JSMWebhookPayload, extra: dict | None = None
+    ) -> dict:
         """Common alert data sent with every webhook POST."""
         data: dict = {
             "event": payload.action,
@@ -392,7 +398,11 @@ class AlertProcessor:
         webhook_ids = getattr(self.settings, config_field, "")
         if not webhook_ids or not webhook_ids.strip():
             return
-        logger.info("Firing event webhook(s) for action=%s alert_id=%s", payload.action, payload.alert.alertId)
+        logger.info(
+            "Firing event webhook(s) for action=%s alert_id=%s",
+            payload.action,
+            payload.alert.alertId,
+        )
         await self.ha_client.fire_webhooks(webhook_ids, self._alert_webhook_data(payload))
 
     async def _fire_state_webhooks(self, payload: JSMWebhookPayload) -> None:
@@ -457,7 +467,9 @@ class AlertProcessor:
             payload.action,
             payload.alert.alertId,
         )
-        await self.ha_client.fire_webhooks(webhook_ids, self._alert_webhook_data(payload, extra))
+        await self.ha_client.fire_webhooks(
+            webhook_ids, self._alert_webhook_data(payload, extra)
+        )
 
     # ── Public entry point ────────────────────────────────────────────────
 

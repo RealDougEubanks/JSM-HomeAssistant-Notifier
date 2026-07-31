@@ -362,6 +362,41 @@ async def test_fire_event_webhooks_not_configured():
     proc.ha_client.fire_webhooks.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_escalate_fires_both_event_and_state_webhooks():
+    """EscalateNext must fire its own event webhook AND update state (red)."""
+    s = _settings(ha_webhook_on_escalate="esc_hook", ha_webhook_on_create="unacked_hook")
+    proc = _processor(s)
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
+    payload = make_alert(action="EscalateNext")
+
+    await proc._fire_event_webhooks(payload)
+    await proc._fire_state_webhooks(payload)
+
+    fired = [c[0][0] for c in proc.ha_client.fire_webhooks.call_args_list]
+    assert fired == ["esc_hook", "unacked_hook"]
+
+
+@pytest.mark.asyncio
+async def test_unacknowledge_drives_state_back_to_unacked():
+    """UnAcknowledge must fire ON_CREATE so the light returns to red."""
+    s = _settings(ha_webhook_on_create="unacked_hook")
+    proc = _processor(s)
+    proc.incident_store = MagicMock()
+    proc.incident_store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
+    payload = make_alert(action="UnAcknowledge")
+
+    await proc._fire_state_webhooks(payload)
+    proc.ha_client.fire_webhooks.assert_called_once()
+    assert proc.ha_client.fire_webhooks.call_args[0][0] == "unacked_hook"
+    assert proc.ha_client.fire_webhooks.call_args[0][1]["state"] == "create"
+
+
 # ── process(): immediate mode with repeat ────────────────────────────────────
 
 

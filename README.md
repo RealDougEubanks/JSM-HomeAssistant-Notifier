@@ -664,6 +664,8 @@ The notifier fires Home Assistant webhook triggers when alert state changes, let
 
 ### State Machine — How Webhook Firing Works
 
+> **⚠️ Prerequisite: set `INCIDENT_DASHBOARD_ENABLED=true`.** The aggregate state below is computed by counting rows in the incident store. With the dashboard disabled there is nothing to count, so `ON_CREATE` / `ON_ACKNOWLEDGE` / `ON_CLOSE` degrade to firing once per matching event — which shows the wrong colour whenever more than one alert is open. The service logs a warning at startup if you configure state webhooks without the dashboard. You should also [mount a volume for the DB](#incident-state-dashboard) so state survives a container restart.
+
 The three main webhooks (`ON_CREATE`, `ON_ACKNOWLEDGE`, `ON_CLOSE`) reflect the **aggregate state of all open incidents**, not just the individual event that arrived. The notifier updates its incident store first, then fires the webhook that matches the current totals:
 
 | Aggregate state | Webhook fired | Example light color |
@@ -680,6 +682,8 @@ Key implications:
 - The payload always includes `unacked_count`, `acked_count`, and `total_open` so your automations can show counts if you want.
 
 Per-event webhooks (`ON_ESCALATE`, `ON_UPDATE`, `ON_SLA_BREACH`) fire for that specific action regardless of aggregate state — useful for flashing a light on escalation without changing the color it holds.
+
+`EscalateNext` and `UnAcknowledge` fire **both**: their per-event webhook *and* a state webhook. So an escalation can flash the light (`ON_ESCALATE`) while the state webhook keeps it red, and an un-acknowledge fires `ON_UPDATE` while the state webhook drives the colour from yellow back to red.
 
 ### Trigger Variables
 

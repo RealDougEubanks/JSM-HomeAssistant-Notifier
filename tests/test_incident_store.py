@@ -261,7 +261,9 @@ async def test_process_updates_incident_store():
     jsm.get_alert_details = AsyncMock(return_value=None)
     store = MagicMock(spec=IncidentStore)
     store.upsert = AsyncMock()
-    store.get_open_counts = AsyncMock(return_value={"unacked": 1, "acked": 0, "total_open": 1})
+    store.get_open_counts = AsyncMock(
+        return_value={"unacked": 1, "acked": 0, "total_open": 1}
+    )
 
     proc = AlertProcessor(settings, jsm, ha, store)
 
