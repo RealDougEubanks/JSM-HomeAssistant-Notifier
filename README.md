@@ -33,6 +33,7 @@ A lightweight Docker service that bridges **Jira Service Management (JSM / OpsGe
 - [Production Recommendations](#production-recommendations)
 - [Security Checklist](#security-checklist)
 - [Project Structure](#project-structure)
+- [Further Reading](#further-reading)
 - [License](#license)
 
 ---
@@ -1593,20 +1594,31 @@ jsm-ha-notifier/
 │   ├── incident_store.py   # SQLite-backed incident state tracker
 │   └── time_windows.py     # Time-window parsing and media player routing
 ├── tests/
-│   ├── conftest.py                  # Shared fixtures
+│   ├── conftest.py                     # Shared fixtures
 │   ├── test_models.py
 │   ├── test_config.py
 │   ├── test_ha_client.py
+│   ├── test_ha_client_coverage.py
+│   ├── test_jsm_client.py
 │   ├── test_alert_processor.py
-│   ├── test_announcement_format.py  # Format, time windows, priority override, repeat
-│   ├── test_robustness.py           # Security: sanitization, safe formatter, emoji toggle
-│   ├── test_incident_store.py       # Incident store, webhooks, force-close, retention
-│   └── test_time_windows.py         # Window parsing, player routing
+│   ├── test_alert_processor_coverage.py # Batch, repeat, state webhooks
+│   ├── test_main_routes.py             # Route, reload, and rate-limit tests
+│   ├── test_security_coverage.py       # Auth, signature, middleware
+│   ├── test_announcement_format.py     # Format, time windows, priority override, repeat
+│   ├── test_robustness.py              # Security: sanitization, safe formatter, emoji toggle
+│   ├── test_incident_store.py          # Incident store, webhooks, force-close, retention
+│   └── test_time_windows.py            # Window parsing, player routing
+├── docs/
+│   ├── RUNBOOK.md          # 2am operational guide — start here when paged
+│   └── ENV_VARS.md         # Every environment variable, with rotation steps
 ├── grafana/
 │   └── incident-dashboard.json      # Pre-built Grafana dashboard (import-ready)
 ├── .env.example            # Template — copy to .env and fill in values
 ├── .gitignore
 ├── CHANGELOG.md
+├── CONTRIBUTING.md         # Dev setup, CI gates, PR checklist
+├── SECURITY.md             # Vulnerability reporting and security controls
+├── LICENSE                 # Apache License 2.0
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml          # black, ruff, pytest, mypy config
@@ -1614,6 +1626,16 @@ jsm-ha-notifier/
 ├── requirements-dev.txt
 └── README.md
 ```
+
+## Further Reading
+
+| Document | Read it when |
+|---|---|
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | You were paged and need to diagnose or restart the service |
+| [docs/ENV_VARS.md](docs/ENV_VARS.md) | You need to know what a variable does or how to rotate a credential |
+| [SECURITY.md](SECURITY.md) | You are reporting a vulnerability or reviewing the security controls |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | You are setting up a dev environment or opening a pull request |
+| [CHANGELOG.md](CHANGELOG.md) | You want to know what changed between releases |
 
 ---
 
