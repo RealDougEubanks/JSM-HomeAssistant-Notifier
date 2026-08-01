@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **State webhooks now reflect aggregate incident state** — `HA_WEBHOOK_ON_CREATE`, `HA_WEBHOOK_ON_ACKNOWLEDGE`, and `HA_WEBHOOK_ON_CLOSE` fire based on the counts of open/acknowledged incidents rather than on individual events, and fire *after* the incident store is updated. Any unacked alert → `ON_CREATE`; all open alerts acked → `ON_ACKNOWLEDGE`; nothing open → `ON_CLOSE`. This makes a status light correct when several alerts are open at once, and makes `UnAcknowledge` drive the light back to the unacked state with no extra configuration. Requires `INCIDENT_DASHBOARD_ENABLED=true`; a startup warning is logged if state webhooks are configured without it.
+- **`EscalateNext` and `UnAcknowledge` fire both webhook kinds** — their per-event webhook (`ON_ESCALATE` / `ON_UPDATE`) *and* a state webhook, so an escalation can flash a light while the state webhook controls the colour it holds.
+- **Bumped dependency minimum versions** to current releases (FastAPI 0.141, uvicorn 0.52, httpx 0.28, pydantic 2.13, pydantic-settings 2.14; dev: pytest 9.1, pytest-asyncio 1.4, mypy 2.3, ruff 0.16, black 26).
+
+### Added
+
+- **`unacked_count` / `acked_count` / `total_open` / `state` fields** in state webhook payloads, for automations that display counts.
+- **`IncidentStore.get_open_counts()`** — aggregate open/acked counts used by the state-webhook logic.
+- **README status-light guide** — full HA YAML for a red/yellow/green bias light, including an `input_select` helper pattern that restores the correct colour when a light is switched on after being manually turned off during an incident.
+
 ## [2.3.0] — 2026-06-12
 
 ### Fixed

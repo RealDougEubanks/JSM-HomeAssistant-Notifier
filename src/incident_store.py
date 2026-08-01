@@ -313,6 +313,21 @@ class IncidentStore:
         """Return aggregate counts for the dashboard."""
         return await self._run(self._get_summary_sync)
 
+    def _get_open_counts_sync(self) -> dict[str, int]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as n FROM incidents "
+            "WHERE status NOT IN ('closed') GROUP BY status"
+        ).fetchall()
+        by_status = {row["status"]: row["n"] for row in rows}
+        unacked = by_status.get("open", 0) + by_status.get("escalated", 0)
+        acked = by_status.get("acknowledged", 0)
+        return {"unacked": unacked, "acked": acked, "total_open": unacked + acked}
+
+    async def get_open_counts(self) -> dict[str, int]:
+        """Return counts of unacked, acked, and total open incidents for state-webhook logic."""
+        return await self._run(self._get_open_counts_sync)
+
     # ── Force-close ────────────────────────────────────────────────────────
 
     def _force_close_sync(self, alert_id: str) -> bool:

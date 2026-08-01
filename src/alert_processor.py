@@ -51,16 +51,20 @@ _MAX_DEDUP_CACHE_SIZE = 10_000
 # Actions that should dismiss the persistent HA notification.
 _DISMISS_ACTIONS = {"Acknowledge", "Close"}
 
-# Map JSM action names to HA automation webhook config field names.
-_ACTION_WEBHOOK_MAP: dict[str, str] = {
-    "Create": "ha_webhook_on_create",
+# Actions that change aggregate open/acked state — trigger a state webhook
+# after the incident store is updated so the light reflects the new totals.
+_STATE_ACTIONS = {"Create", "Acknowledge", "UnAcknowledge", "Close", "EscalateNext"}
+
+# Per-event webhooks, fired for the specific action regardless of aggregate
+# state.  EscalateNext and UnAcknowledge appear here AND in _STATE_ACTIONS:
+# they get their own event webhook (e.g. flash the light) and also update the
+# aggregate state webhook (e.g. the colour the light holds).
+_EVENT_WEBHOOK_MAP: dict[str, str] = {
     "EscalateNext": "ha_webhook_on_escalate",
-    "Acknowledge": "ha_webhook_on_acknowledge",
-    "Close": "ha_webhook_on_close",
     "AddNote": "ha_webhook_on_update",
-    "UnAcknowledge": "ha_webhook_on_update",
     "AssignOwnership": "ha_webhook_on_update",
     "Seen": "ha_webhook_on_update",
+    "UnAcknowledge": "ha_webhook_on_update",
     "SlaBreached": "ha_webhook_on_sla_breach",
 }
 
@@ -368,18 +372,11 @@ class AlertProcessor:
 
     # ── HA automation webhooks ───────────────────────────────────────────
 
-    async def _fire_automation_webhooks(self, payload: JSMWebhookPayload) -> None:
-        """Fire HA automation webhook(s) for the given action, if configured."""
-        config_field = _ACTION_WEBHOOK_MAP.get(payload.action)
-        if not config_field:
-            return
-
-        webhook_ids = getattr(self.settings, config_field, "")
-        if not webhook_ids or not webhook_ids.strip():
-            return
-
-        # Build the data payload passed to HA as trigger variables.
-        data = {
+    def _alert_webhook_data(
+        self, payload: JSMWebhookPayload, extra: dict | None = None
+    ) -> dict:
+        """Common alert data sent with every webhook POST."""
+        data: dict = {
             "event": payload.action,
             "alert_id": payload.alert.alertId,
             "message": payload.alert.message,
@@ -389,13 +386,90 @@ class AlertProcessor:
             "source": payload.alert.source or "",
             "tags": payload.alert.tags,
         }
+        if extra:
+            data.update(extra)
+        return data
 
+    async def _fire_event_webhooks(self, payload: JSMWebhookPayload) -> None:
+        """Fire per-event webhooks for non-state-changing actions (notes, SLA, etc.)."""
+        config_field = _EVENT_WEBHOOK_MAP.get(payload.action)
+        if not config_field:
+            return
+        webhook_ids = getattr(self.settings, config_field, "")
+        if not webhook_ids or not webhook_ids.strip():
+            return
         logger.info(
-            "Firing HA automation webhook(s) for action=%s alert_id=%s",
+            "Firing event webhook(s) for action=%s alert_id=%s",
             payload.action,
             payload.alert.alertId,
         )
-        await self.ha_client.fire_webhooks(webhook_ids, data)
+        await self.ha_client.fire_webhooks(webhook_ids, self._alert_webhook_data(payload))
+
+    async def _fire_state_webhooks(self, payload: JSMWebhookPayload) -> None:
+        """
+        Fire the state webhook that reflects the current AGGREGATE incident state.
+
+        Called after the incident store is updated so the counts are accurate:
+          - Any unacked open alert  → ha_webhook_on_create  (e.g. red light)
+          - All open alerts are acked → ha_webhook_on_acknowledge  (e.g. yellow)
+          - No open alerts at all   → ha_webhook_on_close   (e.g. green / off)
+
+        This means UnAcknowledge automatically drives the light back to red
+        without a dedicated config field.
+        """
+        if payload.action not in _STATE_ACTIONS:
+            return
+
+        if self.incident_store:
+            try:
+                counts = await self.incident_store.get_open_counts()
+            except Exception as exc:
+                logger.error("Could not read incident counts for state webhook: %s", exc)
+                return
+        else:
+            # No store — fall back to single-event semantics.
+            counts = None
+
+        if counts is None:
+            # Determine state from the action alone (no store available).
+            if payload.action in ("Close",):
+                config_field = "ha_webhook_on_close"
+            elif payload.action in ("Acknowledge",):
+                config_field = "ha_webhook_on_acknowledge"
+            else:
+                config_field = "ha_webhook_on_create"
+        elif counts["unacked"] > 0:
+            config_field = "ha_webhook_on_create"
+        elif counts["total_open"] > 0:
+            config_field = "ha_webhook_on_acknowledge"
+        else:
+            config_field = "ha_webhook_on_close"
+
+        webhook_ids = getattr(self.settings, config_field, "")
+        if not webhook_ids or not webhook_ids.strip():
+            return
+
+        extra = {}
+        if counts is not None:
+            extra = {
+                "state": config_field.replace("ha_webhook_on_", ""),
+                "unacked_count": counts["unacked"],
+                "acked_count": counts["acked"],
+                "total_open": counts["total_open"],
+            }
+
+        logger.info(
+            "Firing state webhook(s) field=%s (unacked=%s acked=%s total_open=%s) for action=%s alert_id=%s",
+            config_field,
+            counts["unacked"] if counts else "?",
+            counts["acked"] if counts else "?",
+            counts["total_open"] if counts else "?",
+            payload.action,
+            payload.alert.alertId,
+        )
+        await self.ha_client.fire_webhooks(
+            webhook_ids, self._alert_webhook_data(payload, extra)
+        )
 
     # ── Public entry point ────────────────────────────────────────────────
 
@@ -416,8 +490,8 @@ class AlertProcessor:
             "reason": "",
         }
 
-        # ── Fire HA automation webhooks (for ALL actions) ─────────────────
-        await self._fire_automation_webhooks(payload)
+        # ── Per-event webhooks (notes, SLA — no DB state needed) ──────────
+        await self._fire_event_webhooks(payload)
 
         # ── Update incident store (for ALL actions) ───────────────────────
         if self.incident_store:
@@ -450,6 +524,9 @@ class AlertProcessor:
                 await self.incident_store.upsert(alert_dict, payload.action)
             except Exception as exc:
                 logger.error("Failed to update incident store: %s", exc)
+
+        # ── State webhooks (light color) — fires AFTER upsert ─────────────
+        await self._fire_state_webhooks(payload)
 
         # ── Dismiss on close / ack ────────────────────────────────────────
         if payload.action in _DISMISS_ACTIONS:
