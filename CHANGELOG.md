@@ -2,19 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [3.0.0] — 2026-07-31
+
+### ⚠️ Breaking changes
+
+**The firing semantics of three existing webhook settings changed.** If you have HA automations bound to `HA_WEBHOOK_ON_CREATE`, `HA_WEBHOOK_ON_ACKNOWLEDGE`, or `HA_WEBHOOK_ON_CLOSE`, they will behave differently after upgrading even though your configuration is unchanged.
+
+| Setting | 2.x behaviour | 3.0 behaviour |
+|---|---|---|
+| `HA_WEBHOOK_ON_CREATE` | fired on each `Create` action | fires whenever **any** open alert is unacknowledged — including on `UnAcknowledge` |
+| `HA_WEBHOOK_ON_ACKNOWLEDGE` | fired on each `Acknowledge` action | fires only when **every** open alert is acknowledged |
+| `HA_WEBHOOK_ON_CLOSE` | fired on each `Close` action | fires only when **no** open alerts remain |
+
+**New prerequisite:** these three webhooks now require `INCIDENT_DASHBOARD_ENABLED=true`, because aggregate state is computed by counting rows in the incident store. Without it they fall back to per-event firing and will show the wrong state whenever more than one alert is open. A warning is logged at startup if you configure them without the dashboard.
+
+#### Migration
+
+1. Set `INCIDENT_DASHBOARD_ENABLED=true` in `.env`.
+2. Persist the incident database. The default `INCIDENT_DB_PATH=/tmp/incidents.db` is on the container's tmpfs and is wiped on restart — if the service restarts while an alert is open, the store returns empty and the next event computes "no open alerts", turning a status light green during a live incident. Mount a volume and set `INCIDENT_DB_PATH=/data/incidents.db`; `docker-compose.yml` ships a commented-out example.
+3. Review any automation that assumed one webhook call per alert event. If you relied on `ON_CLOSE` firing per closed alert, switch that automation to `HA_WEBHOOK_ON_UPDATE`, or drive it from the `total_open` field now included in the payload.
+4. Restart, then confirm with `curl -H "X-API-Key: $KEY" localhost:8080/status`.
+
+To keep 2.x behaviour, pin `image: ghcr.io/realdougeubanks/jsm-ha-notifier:2.3.0` in `docker-compose.yml`.
 
 ### Changed
 
-- **State webhooks now reflect aggregate incident state** — `HA_WEBHOOK_ON_CREATE`, `HA_WEBHOOK_ON_ACKNOWLEDGE`, and `HA_WEBHOOK_ON_CLOSE` fire based on the counts of open/acknowledged incidents rather than on individual events, and fire *after* the incident store is updated. Any unacked alert → `ON_CREATE`; all open alerts acked → `ON_ACKNOWLEDGE`; nothing open → `ON_CLOSE`. This makes a status light correct when several alerts are open at once, and makes `UnAcknowledge` drive the light back to the unacked state with no extra configuration. Requires `INCIDENT_DASHBOARD_ENABLED=true`; a startup warning is logged if state webhooks are configured without it.
+- **State webhooks now reflect aggregate incident state** — `ON_CREATE` / `ON_ACKNOWLEDGE` / `ON_CLOSE` fire based on the counts of open and acknowledged incidents rather than on individual events, and fire *after* the incident store is updated so the counts are accurate. This makes a status light correct when several alerts are open at once, and makes `UnAcknowledge` drive the light back to the unacked state with no extra configuration.
 - **`EscalateNext` and `UnAcknowledge` fire both webhook kinds** — their per-event webhook (`ON_ESCALATE` / `ON_UPDATE`) *and* a state webhook, so an escalation can flash a light while the state webhook controls the colour it holds.
 - **Bumped dependency minimum versions** to current releases (FastAPI 0.141, uvicorn 0.52, httpx 0.28, pydantic 2.13, pydantic-settings 2.14; dev: pytest 9.1, pytest-asyncio 1.4, mypy 2.3, ruff 0.16, black 26).
+- **Corrected stale documentation** — `CONTRIBUTING.md` claimed Python 3.12+ (CI tests 3.11) and a black line length of 88 (`pyproject.toml` sets 90), and omitted the CI steps that gate a PR. The README project-structure tree listed 9 of 15 test files and omitted `CONTRIBUTING.md`, `SECURITY.md`, and `LICENSE`.
 
 ### Added
 
-- **`unacked_count` / `acked_count` / `total_open` / `state` fields** in state webhook payloads, for automations that display counts.
+- **`unacked_count` / `acked_count` / `total_open` / `state` fields** in state webhook payloads, for automations that display counts or need per-alert-event behaviour.
 - **`IncidentStore.get_open_counts()`** — aggregate open/acked counts used by the state-webhook logic.
+- **Startup warning** when state webhooks are configured but `INCIDENT_DASHBOARD_ENABLED=false`.
 - **README status-light guide** — full HA YAML for a red/yellow/green bias light, including an `input_select` helper pattern that restores the correct colour when a light is switched on after being manually turned off during an incident.
+- **`docs/RUNBOOK.md`** — operational guide for a 2am page: liveness checks, 14 known failure modes with fixes, diagnostics, end-to-end verification, and rollback.
+- **`docs/ENV_VARS.md`** — reference for all 47 environment variables, which 6 are required, where to obtain each credential, and rotation procedures.
+- **`SECURITY.md`** — vulnerability reporting process, sensitive-data inventory, deployment requirements, and the 16 implemented security controls with source locations.
 
 ## [2.3.0] — 2026-06-12
 

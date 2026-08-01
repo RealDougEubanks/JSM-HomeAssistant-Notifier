@@ -276,7 +276,7 @@ def _build_app() -> FastAPI:
             "Receives JSM / OpsGenie webhooks and plays TTS alerts "
             "on Home Assistant when you are on-call or escalated to."
         ),
-        version="2.3.0",
+        version="3.0.0",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,

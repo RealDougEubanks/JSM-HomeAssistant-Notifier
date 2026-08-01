@@ -139,5 +139,5 @@ Only the latest release receives security fixes. Pin a specific image tag in
 production so `docker compose pull` cannot swap code underneath you:
 
 ```yaml
-image: ghcr.io/realdougeubanks/jsm-ha-notifier:2.3.0
+image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.0.0
 ```
