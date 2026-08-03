@@ -1,10 +1,24 @@
 name: Build & Push Docker Image
 
+# Releases are cut by pushing a version tag.  This previously also ran on
+# every push to main, which meant a full multi-arch QEMU build, cosign
+# signature, SLSA attestation, and two image scans on every merge — 10 of the
+# last 13 runs were main pushes publishing images nobody had asked for.
+# Use workflow_dispatch for an ad-hoc build from a branch.
 on:
   push:
-    branches: [main]
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "Push to registries (false = build and scan only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   GHCR_REGISTRY: ghcr.io
@@ -20,6 +34,10 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       HAS_DOCKERHUB: ${{ vars.DOCKERHUB_USERNAME != '' }}
+      # True when an image is actually pushed to a registry.  Signing,
+      # attestation, and registry-side steps are meaningless without a
+      # published digest, so they are gated on this.
+      PUBLISHING: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.push_image }}
 
     permissions:
       contents: read
@@ -71,17 +89,17 @@ jobs:
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
             ${{ env.DOCKERHUB_IMAGE }}
           tags: |
-            # Branch builds: :main
-            type=ref,event=branch
-            # Tag builds: :v1.2.3
-            type=ref,event=tag
-            # Semver floating tags: :1  :1.2  (tag pushes only)
+            # Release tag builds: :3.0.0
+            type=semver,pattern={{version}}
+            # Semver floating tags: :3  :3.0
             type=semver,pattern={{major}}
             type=semver,pattern={{major}}.{{minor}}
-            # Short SHA: :abc1234
+            # Short SHA: :abc1234 — immutable reference for rollback
             type=sha,prefix=
-            # latest only on default branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Manual dispatch builds are branch-tagged, never :latest
+            type=ref,event=branch
+            # :latest tracks the newest release tag (was: newest main commit)
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=JSM Home Assistant Notifier
             org.opencontainers.image.description=Bridges JSM/OpsGenie alerts to Home Assistant TTS and notifications
@@ -96,8 +114,12 @@ jobs:
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
+          # arm64 is emulated through QEMU and dominates build time.  Tag
+          # builds get both architectures; a manual dispatch builds amd64
+          # only unless it is actually being pushed.
+          platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.push_image) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.push_image }}
+          load: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Layer caching via GitHub Actions cache
@@ -106,6 +128,7 @@ jobs:
 
       # ── Image signing with cosign (keyless / Sigstore) ──────────────────
       - name: Sign image with cosign
+        if: env.PUBLISHING == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -116,6 +139,7 @@ jobs:
 
       # ── SLSA build provenance attestation ───────────────────────────────
       - name: Generate SLSA provenance attestation
+        if: env.PUBLISHING == 'true'
         uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd # v2.3.0
         with:
           subject-name: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
@@ -128,11 +152,13 @@ jobs:
       # needs — preventing accidental secret exposure to scanner processes.
 
       - name: Install Trivy
+        if: env.PUBLISHING == 'true'
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin
 
       - name: Run Trivy vulnerability scanner
+        if: env.PUBLISHING == 'true'
         env:
           _SCAN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           _SCAN_IMAGE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}
@@ -151,18 +177,20 @@ jobs:
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
-        if: always()
+        if: always() && env.PUBLISHING == 'true'
         with:
           sarif_file: "trivy-results.sarif"
           category: trivy
         continue-on-error: true
 
       - name: Install Grype
+        if: env.PUBLISHING == 'true'
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sh -s -- -b /usr/local/bin
 
       - name: Run Grype vulnerability scanner
+        if: env.PUBLISHING == 'true'
         env:
           _SCAN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           _SCAN_IMAGE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}
@@ -180,7 +208,7 @@ jobs:
 
       - name: Upload Grype scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
-        if: always()
+        if: always() && env.PUBLISHING == 'true'
         with:
           sarif_file: "grype-results.sarif"
           category: grype
@@ -189,7 +217,7 @@ jobs:
       # ── Docker Hub README sync ───────────────────────────────────────────
       - name: Update Docker Hub repository description
         uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
-        if: env.HAS_DOCKERHUB == 'true'
+        if: env.HAS_DOCKERHUB == 'true' && env.PUBLISHING == 'true'
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -167,9 +167,15 @@ class AlertProcessor:
             logger.info("Escalation recipient matches my user ID")
             return True
 
-        # Fallback: check the alert's responders list.
+        # Fallback: check the alert's responders list.  Entries may be dicts
+        # or bare ID strings, so normalise before comparing — calling .get()
+        # on a string raised AttributeError here and aborted the escalation
+        # check, which meant a missed page.
         for responder in payload.alert.responders:
-            if responder.get("id") == my_id:
+            responder_id = (
+                responder.get("id") if isinstance(responder, dict) else responder
+            )
+            if responder_id == my_id:
                 logger.info("Found my user ID in alert responders (escalation)")
                 return True
 

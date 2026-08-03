@@ -365,3 +365,60 @@ async def test_enrichment_fields_stored(store: IncidentStore):
     assert "SRE" in result["teams"]
     assert "Alice" in result["responders"]
     assert "runbook" in result["details_json"]
+
+
+# ── Loosely-typed JSM label fields ───────────────────────────────────────────
+# JSM returns tags / teams / responders as a mix of dicts, bare strings, and
+# dicts whose "name" is explicitly null.  A naive join raised TypeError or
+# AttributeError, which upsert() swallowed — silently dropping the incident.
+
+
+def test_join_labels_handles_null_name_and_bare_strings():
+    """Null names fall back to id; bare strings pass through; junk is dropped."""
+    from src.incident_store import _join_labels
+
+    assert _join_labels([{"name": None, "id": "t1"}]) == "t1"
+    assert _join_labels(["plain-string"]) == "plain-string"
+    assert _join_labels([{"name": "SRE"}, "raw-id", {"id": "t2"}]) == "SRE,raw-id,t2"
+    assert _join_labels([{"name": None, "id": None}]) == ""
+    assert _join_labels([]) == ""
+    assert _join_labels(None) == ""
+    assert _join_labels("not-a-list") == ""
+
+
+async def test_upsert_survives_null_team_name(store: IncidentStore):
+    """A null team name must not abort the upsert — the row still lands."""
+    await store.upsert(
+        {
+            "alertId": "nullname-001",
+            "message": "Null name test",
+            "priority": "P2",
+            "teams": [{"name": None, "id": "team-fallback"}],
+            "responders": ["bare-responder-id"],
+            "tags": ["ok"],
+        },
+        "Create",
+    )
+
+    result = await store.get_one("nullname-001")
+    assert result is not None, "incident was dropped by a label-join failure"
+    assert result["teams"] == "team-fallback"
+    assert result["responders"] == "bare-responder-id"
+
+
+async def test_escalation_detected_with_bare_string_responder():
+    """A bare-string responder must not crash the escalation check."""
+    settings = _settings(jsm_my_user_id="my-user-id")
+    ha = MagicMock(spec=HAClient)
+    jsm = MagicMock(spec=JSMClient)
+    proc = AlertProcessor(settings, jsm, ha)
+
+    payload = make_alert(action="EscalateNext")
+    payload.alert.responders = ["my-user-id"]
+    payload.recipient = None
+
+    # Previously raised AttributeError: 'str' object has no attribute 'get'
+    assert proc._escalated_to_me(payload) is True
+
+    payload.alert.responders = ["someone-else"]
+    assert proc._escalated_to_me(payload) is False

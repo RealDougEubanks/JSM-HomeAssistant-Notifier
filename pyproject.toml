@@ -21,3 +21,15 @@ python_functions = ["test_*"]
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
+# The pydantic plugin teaches mypy that BaseSettings subclasses populate
+# their fields from the environment, so `Settings()` with no arguments is
+# valid.  Without it mypy reports a false "missing named argument" for
+# every required field at each construction site.
+plugins = ["pydantic.mypy"]
+
+[tool.bandit]
+# B108 flags "/tmp" paths as insecure temp usage.  Here the default
+# INCIDENT_DB_PATH=/tmp/incidents.db is deliberate: the container runs with a
+# read-only root filesystem and /tmp is the only writable mount (a tmpfs).
+# The path is operator-configurable and documented as ephemeral.
+skips = ["B108"]

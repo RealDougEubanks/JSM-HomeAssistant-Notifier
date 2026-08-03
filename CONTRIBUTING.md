@@ -42,6 +42,38 @@ to obtain each credential.
 > **SECURITY:** `.env` is excluded by `.gitignore`. Do not remove that entry, and
 > do not force-add the file.
 
+### Install the git hooks (do this once)
+
+```bash
+pre-commit install --install-hooks
+```
+
+This installs both a pre-commit and a pre-push hook. They run the same checks CI
+runs, so problems surface in about a second locally instead of after a push.
+
+| Stage | Runs |
+|-------|------|
+| pre-commit | ruff (autofix), black, gitleaks secret scan, mypy, bandit, YAML/JSON/TOML validation, whitespace and line-ending fixes, large-file and private-key detection, `docker compose config` |
+| pre-push | the full pytest suite |
+
+Several hooks rewrite files in place (black, ruff `--fix`, whitespace). When that
+happens the commit is aborted with the fixes already applied — review them with
+`git diff`, `git add`, and commit again.
+
+Run everything manually at any time:
+
+```bash
+pre-commit run --all-files
+```
+
+> **SECURITY:** The `gitleaks` hook is the last line of defence against a
+> committed credential. In a public repo a pushed secret cannot be un-published,
+> only revoked. Do not use `--no-verify` to get around it — if it fires, treat
+> the finding as real until you have proven otherwise.
+
+Bypassing hooks in a genuine emergency is `git commit --no-verify`. CI still
+enforces every blocking check, so nothing reaches `main` unverified.
+
 ### Run the test suite
 
 ```bash
@@ -63,22 +95,29 @@ black src/ tests/
 
 ## What CI Checks
 
-CI runs on every pull request against Python 3.11, 3.12, and 3.13. Reproduce the
-full gate locally before pushing:
+CI is split so that version-independent checks run once, and only the test suite
+runs across the version matrix.
 
-| Step | Command | Blocks merge? |
-|------|---------|--------------|
-| Lint | `ruff check src/ tests/` | Yes |
-| Format | `black --check src/ tests/` | Yes |
-| Tests + coverage | `pytest tests/ --cov=src --cov-fail-under=70` | Yes — coverage must stay at or above 70% |
-| Dependency CVE scan | `pip-audit -r requirements.txt --desc` | Yes |
-| Type check | `mypy src/ --ignore-missing-imports` | No — advisory only |
-| Security scan | `bandit -r src/ -c pyproject.toml` | No — advisory only |
+| Job | Runs | When | Blocks merge? |
+|-----|------|------|--------------|
+| Lint, format, types, security | `ruff`, `black --check`, `mypy`, `bandit` | Python 3.12 only — results are identical across versions | Yes |
+| Tests (Python 3.11 / 3.12 / 3.13) | `pytest --cov-fail-under=70` | Full matrix on PRs; 3.12 only on direct pushes to `main` | Yes — coverage must stay at or above 70% |
+| Dependency CVE scan | `pip-audit -r requirements.txt` | Only when `requirements*.txt`, `Dockerfile`, or `pyproject.toml` change, plus weekly on a schedule | Yes |
+
+Every blocking check above is also a pre-commit hook, so a clean local commit is
+almost always a green CI run. `mypy` and `bandit` used to be advisory; they are
+now blocking, because the errors they had been reporting were fixed.
+
+Reproduce the whole gate in one command:
+
+```bash
+pre-commit run --all-files && pytest tests/ -q
+```
 
 > **Formatter version matters.** `black` changes its line-wrapping between major
-> releases, so an older local `black` can produce output that CI rejects. Install
-> the pinned floor from `requirements-dev.txt` rather than whatever is already on
-> your system.
+> releases, so an older local `black` can produce output that CI rejects. The
+> pre-commit hook pins its own `black`, which sidesteps this — another reason to
+> install the hooks rather than relying on a system-wide install.
 
 ## Workflow
 

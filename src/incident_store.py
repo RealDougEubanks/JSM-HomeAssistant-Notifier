@@ -53,6 +53,29 @@ CREATE INDEX IF NOT EXISTS idx_incidents_priority ON incidents(priority);
 """
 
 
+def _join_labels(raw: Any) -> str:
+    """
+    Flatten a JSM tags / teams / responders field into a comma-separated string.
+
+    These fields are loosely typed by the upstream API: each entry may be a
+    dict (``{"name": ...}`` or ``{"id": ...}``), a bare string, or a dict whose
+    ``name`` is explicitly ``null``.  A naive ``",".join(d.get("name", ...))``
+    raises ``TypeError`` on a null name and ``AttributeError`` on a bare
+    string, which previously surfaced as a swallowed "Failed to update
+    incident store" and a missing dashboard row.
+    """
+    if not isinstance(raw, list):
+        return ""
+    labels: list[str] = []
+    for item in raw:
+        # `or` rather than a .get() default, so an explicit null name falls
+        # through to the id instead of yielding None.
+        value = (item.get("name") or item.get("id")) if isinstance(item, dict) else item
+        if value:
+            labels.append(str(value))
+    return ",".join(labels)
+
+
 class IncidentStore:
     """Thread-safe async wrapper around a SQLite incident database."""
 
@@ -101,27 +124,9 @@ class IncidentStore:
         source = alert.get("source", "") or ""
 
         # Enrichment fields (may come from JSM API detail calls).
-        tags = (
-            ",".join(alert.get("tags", [])) if isinstance(alert.get("tags"), list) else ""
-        )
-        teams_raw = alert.get("teams", [])
-        teams = (
-            ",".join(
-                t.get("name", t.get("id", "")) for t in teams_raw if isinstance(t, dict)
-            )
-            if isinstance(teams_raw, list)
-            else ""
-        )
-        responders_raw = alert.get("responders", [])
-        responders = (
-            ",".join(
-                r.get("name", r.get("id", ""))
-                for r in responders_raw
-                if isinstance(r, dict)
-            )
-            if isinstance(responders_raw, list)
-            else ""
-        )
+        tags = _join_labels(alert.get("tags"))
+        teams = _join_labels(alert.get("teams"))
+        responders = _join_labels(alert.get("responders"))
         details_json = (
             json.dumps(alert.get("details", {})) if alert.get("details") else ""
         )

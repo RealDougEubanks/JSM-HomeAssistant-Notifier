@@ -1,0 +1,124 @@
+---
+# Pre-commit hooks — catch problems locally instead of burning a CI run.
+#
+# Install once per clone:
+#   pip install pre-commit
+#   pre-commit install --install-hooks
+#   pre-commit install --hook-type pre-push
+#
+# Run manually against everything:
+#   pre-commit run --all-files
+#
+# Skip in an emergency (use sparingly — CI still enforces all of this):
+#   git commit --no-verify
+
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # ── Formatting and linting (mirrors the blocking CI steps) ───────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.1
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: ruff format check
+        stages: [manual]   # black is the formatter of record; see below
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.5.1
+    hooks:
+      - id: black
+        name: black (format)
+
+  # ── Secret detection — highest-value hook in this repo ──────────────────
+  # This service handles Atlassian API tokens, HA long-lived tokens, and a
+  # webhook API key.  A committed secret cannot be un-published from a public
+  # repo; it can only be revoked.  This blocks the commit before that happens.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret scan)
+
+  # ── General hygiene ─────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: debug-statements       # no stray breakpoint() / pdb in committed code
+      - id: name-tests-test
+        args: [--pytest-test-first]
+
+  # ── Static typing (advisory in CI, fast enough to run locally) ──────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.3.0
+    hooks:
+      - id: mypy
+        name: mypy (type check)
+        args: [--ignore-missing-imports]
+        additional_dependencies:
+          - pydantic>=2.13.0
+          - pydantic-settings>=2.14.0
+        files: ^src/
+
+  # ── Python security lint ────────────────────────────────────────────────
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        name: bandit (security lint)
+        args: [-c, pyproject.toml]
+        additional_dependencies: ["bandit[toml]"]
+        files: ^src/
+
+  # ── Local hooks ─────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      # Belt-and-braces against the one mistake that matters most here.
+      # .gitignore already excludes .env, but `git add -f` bypasses it.
+      - id: no-env-file
+        name: block committing .env
+        entry: .env must never be committed — it holds live credentials
+        language: fail
+        files: '^\.env$|(^|/)\.env\.(?!example)'
+
+      # Docker Compose must stay parseable — a typo here breaks deploys,
+      # and the file is not covered by the Python test suite.
+      - id: compose-config
+        name: validate docker-compose.yml
+        entry: docker compose -f docker-compose.yml config
+        language: system
+        pass_filenames: false
+        files: ^docker-compose\.yml$
+        args: [--quiet]
+
+      # Full suite on push only — too slow for every commit, but stops a
+      # broken branch from ever reaching CI.
+      #
+      # `python -m pytest` rather than bare `pytest` so this resolves through
+      # the active interpreter instead of requiring pytest on PATH.  If it
+      # reports "No module named pytest", activate your venv and reinstall
+      # requirements-dev.txt — do not work around it with --no-verify.
+      - id: pytest
+        name: pytest (full suite)
+        entry: python -m pytest tests/ -q --no-header
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        types: [python]

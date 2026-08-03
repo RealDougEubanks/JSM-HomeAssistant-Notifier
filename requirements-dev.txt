@@ -8,3 +8,11 @@ respx>=0.23.0        # Mock httpx requests in tests
 black>=26.0.0
 ruff>=0.16.0
 mypy>=2.3.0
+
+# Security tooling — pinned here (not installed ad-hoc in CI) so the pip
+# cache covers them and local runs match CI exactly.
+bandit[toml]>=1.9.0
+pip-audit>=2.9.0
+
+# Git hooks — see .pre-commit-config.yaml
+pre-commit>=4.6.0
