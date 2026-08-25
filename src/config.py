@@ -30,7 +30,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from .time_windows import Window, parse_windows
+from .time_windows import DayWindow, Window, parse_day_windows, parse_windows
 
 # Fields that accept plain comma-separated strings in addition to JSON arrays.
 _CSV_FIELDS = frozenset({"always_notify_schedule_names", "check_oncall_schedule_names"})
@@ -158,9 +158,32 @@ class Settings(BaseSettings):
     # silent windows).  Comma-separated, e.g. "P1" or "P1,P2".
     silent_window_override_priorities: str = ""
 
+    # ── After-hours suppression (JSM notification-policy parity) ─────────
+    # JSM's "Business Hours Only" alert policy tags low-priority alerts, and a
+    # notification policy then defers those notifications to the next weekday
+    # morning.  Outgoing webhooks are NOT subject to notification policies, so
+    # this service would otherwise announce alerts JSM has deliberately held.
+    #
+    # BUSINESS_HOURS_WINDOW defines office hours (weekday-aware, unlike
+    # SILENT_WINDOW which is time-of-day only and so cannot mute weekends).
+    #   Example: "Mon-Fri 09:00-17:00"
+    # Leave empty to disable after-hours suppression entirely.
+    business_hours_window: str = ""
+
+    # Alerts carrying ANY of these tags are announced silently (persistent
+    # HA notification only, no TTS) outside BUSINESS_HOURS_WINDOW.
+    # Comma-separated.  Matching is case-insensitive.
+    # Default mirrors the tag JSM's alert policy already applies.
+    after_hours_silent_tags: str = "business-hours-only"
+
+    # Priorities that stay audible outside business hours regardless of tags.
+    # Comma-separated, e.g. "P1" or "P1,P2".  Leave empty for no override.
+    after_hours_override_priorities: str = "P1,P2"
+
     # Parsed window lists — populated by the model validator below.
     _silent_windows: list[Window] = []
     _terse_windows: list[Window] = []
+    _business_hours: list[DayWindow] = []
 
     # ── Media player routing ─────────────────────────────────────────────
     # Route TTS to different speakers by time of day.
@@ -272,6 +295,9 @@ class Settings(BaseSettings):
     def _parse_derived_fields(self) -> Settings:
         object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
         object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
+        object.__setattr__(
+            self, "_business_hours", parse_day_windows(self.business_hours_window)
+        )
         return self
 
     # ── Client construction mappings ─────────────────────────────────────────

@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **After-hours suppression, for parity with JSM notification policies.** JSM's
+  *Business Hours Only* alert policy tags low-priority alerts with
+  `business-hours-only`, and a notification policy defers those to the next
+  weekday morning. Outgoing webhooks bypass notification policies entirely, so
+  this service was announcing P3 alerts at 02:00 that JSM had deliberately held
+  until 09:00 — the on-call engineer's phone stayed quiet while the speaker did
+  not.
+
+  Three new settings, all optional and disabled by default:
+
+  | Setting | Default | Purpose |
+  |---|---|---|
+  | `BUSINESS_HOURS_WINDOW` | *(empty, disabled)* | Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00` |
+  | `AFTER_HOURS_SILENT_TAGS` | `business-hours-only` | Tags that trigger suppression, matched case-insensitively |
+  | `AFTER_HOURS_OVERRIDE_PRIORITIES` | `P1,P2` | Priorities that stay audible around the clock |
+
+  Suppressed alerts still post the persistent HA notification and still update
+  the status light — only TTS is withheld, so nothing is lost overnight.
+
+  The check keys off the tag JSM already applies rather than re-implementing the
+  priority list, so JSM remains the single source of truth: change the policy in
+  JSM and this service follows with no code change.
+
+- **Weekday-aware time windows** (`parse_day_windows`, `in_any_day_window` in
+  `src/time_windows.py`). Existing windows are time-of-day only, which cannot
+  express "outside office hours" — a plain silent window mutes 02:00 Tuesday but
+  leaves 14:00 Saturday audible. Day ranges wrap the week, so `Fri-Mon` covers
+  Fri, Sat, Sun and Mon.
+
+### Notes
+
+- After-hours suppression is applied *after* `SILENT_WINDOW_OVERRIDE_PRIORITIES`
+  so that override cannot resurrect an alert JSM would have deferred.
+- `make_alert()` in `tests/conftest.py` gained a `tags` parameter.
+
 ## [3.0.0] — 2026-07-31
 
 ### ⚠️ Breaking changes

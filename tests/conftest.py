@@ -23,6 +23,7 @@ def make_alert(
     action: str = "Create",
     recipient_id: str | None = None,
     responder_ids: list[str] | None = None,
+    tags: list[str] | None = None,
 ) -> JSMWebhookPayload:
     recipient = None
     if recipient_id:
@@ -39,6 +40,7 @@ def make_alert(
             entity=entity,
             description=description,
             responders=responders,
+            tags=tags or [],
         ),
         recipient=recipient,
     )
