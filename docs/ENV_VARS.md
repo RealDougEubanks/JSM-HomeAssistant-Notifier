@@ -108,9 +108,9 @@ schedule is silently ignored.
 | `SILENT_WINDOW` | No | *(empty)* | Window with no TTS, e.g. `23:00-06:30`; notifications still post | `src/time_windows.py` |
 | `TERSE_WINDOW` | No | *(empty)* | Window using the shortened announcement format | `src/time_windows.py` |
 | `SILENT_WINDOW_OVERRIDE_PRIORITIES` | No | *(empty)* | Priorities that speak anyway during a silent window, e.g. `P1` | `src/alert_processor.py` |
-| `BUSINESS_HOURS_WINDOW` | No | *(empty, disabled)* | Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00`. Outside it, tagged alerts go silent | `src/time_windows.py` |
-| `AFTER_HOURS_SILENT_TAGS` | No | `business-hours-only` | Tags that trigger after-hours suppression; matched case-insensitively | `src/alert_processor.py` |
-| `AFTER_HOURS_OVERRIDE_PRIORITIES` | No | `P1,P2` | Priorities that stay audible outside business hours regardless of tags | `src/alert_processor.py` |
+| `BUSINESS_HOURS_WINDOW` | No | *(empty, disabled)* | Master switch. Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00` | `src/time_windows.py` |
+| `AFTER_HOURS_AUDIBLE_PRIORITIES` | No | `P1,P2` | Outside business hours, only these priorities are spoken aloud | `src/alert_processor.py` |
+| `AFTER_HOURS_SILENT_TAGS` | No | *(empty)* | Optional. Tags forcing silence after hours even for an audible priority | `src/alert_processor.py` |
 | `ALERT_BATCH_WINDOW_SECONDS` | No | `0` (immediate) | Collect alerts for N seconds and announce them as one summary | `src/alert_processor.py` |
 | `TTS_REPEAT_INTERVAL_SECONDS` | No | `0` (disabled) | Re-announce an unacknowledged alert every N seconds | `src/alert_processor.py` |
 | `TTS_REPEAT_MAX` | No | `5` | Maximum re-announcements before giving up | `src/alert_processor.py` |
@@ -118,25 +118,36 @@ schedule is silently ignored.
 
 ### After-hours suppression
 
-`BUSINESS_HOURS_WINDOW` exists to restore parity with JSM. JSM's *Business Hours
-Only* alert policy tags low-priority alerts with `business-hours-only`, and a
-notification policy then defers those to the next weekday morning — which is why
-the on-call engineer is not paged overnight for a P3.
+Alerting platforms let you defer low-priority notifications outside office hours,
+but those rules apply only to the platform's **own** delivery channels (mobile,
+email, SMS). Outgoing webhooks are not one of them — a webhook fires the instant
+the alert is created, before any notification policy applies.
 
-Outgoing webhooks are **not** subject to notification policies; they fire the
-instant the alert is created. Without these settings the service announces alerts
-JSM has deliberately held until morning.
+The effect is that the whole team is protected by the platform rule while the
+person on the webhook is not. `BUSINESS_HOURS_WINDOW` closes that gap.
 
-Because the check keys off the tag JSM already applies, JSM remains the single
-source of truth — change the priorities in the JSM alert policy and this service
-follows with no code change.
+Set it and, outside those hours, only `AFTER_HOURS_AUDIBLE_PRIORITIES` are spoken
+aloud. Everything else still posts the persistent HA notification and still
+updates the status light — only TTS is withheld, so nothing is lost.
 
 `BUSINESS_HOURS_WINDOW` is weekday-aware, unlike `SILENT_WINDOW`. That matters: a
 time-of-day silent window correctly mutes 02:00 Tuesday but leaves 14:00 Saturday
-audible. Day ranges wrap the week, so `Fri-Mon` covers Fri, Sat, Sun and Mon.
+audible. Day ranges wrap the week, so `Fri-Mon` covers Fri, Sat, Sun and Mon. For
+windows crossing midnight the weekday matches the day the window started.
+
+Note that `TERSE_WINDOW` does **not** make anything quiet — it only shortens the
+spoken text. A terse announcement is still played at full volume.
+
+`AFTER_HOURS_SILENT_TAGS` is optional and empty by default. Use it when your
+alerting platform already tags deferrable alerts (JSM alert policies can do this)
+and you would rather honour that decision than duplicate the rule here. A listed
+tag forces silence even if the priority is otherwise audible.
 
 Suppression is applied *after* `SILENT_WINDOW_OVERRIDE_PRIORITIES`, so that
-override cannot resurrect an alert JSM would have deferred.
+override cannot resurrect an alert suppression has muted.
+
+See the [README section](../README.md#quiet-hours--after-hours-suppression) for
+worked examples and a verification procedure.
 
 Set `TZ` if you use any window setting. Without it the container runs in UTC and
 your quiet hours will fire at the wrong local time.

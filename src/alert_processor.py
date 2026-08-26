@@ -123,8 +123,8 @@ class AlertProcessor:
             settings.silent_window_override_priorities
         )
         self._repeat_priorities = _parse_priority_set(settings.tts_repeat_priorities)
-        self._after_hours_override_priorities = _parse_priority_set(
-            settings.after_hours_override_priorities
+        self._after_hours_audible_priorities = _parse_priority_set(
+            settings.after_hours_audible_priorities
         )
         self._after_hours_silent_tags = frozenset(
             t.strip().lower()
@@ -136,27 +136,35 @@ class AlertProcessor:
 
     def _suppress_after_hours(self, payload: JSMWebhookPayload) -> bool:
         """
-        True when this alert should be announced silently because JSM's
-        notification policy would have deferred it to the next business day.
+        True when this alert should be announced silently because it arrived
+        outside business hours and does not warrant waking anyone.
 
-        Mirrors the JSM "Business Hours Only" alert policy (which tags
-        low-priority alerts) plus the notification policy that defers those
-        tags outside office hours.  Outgoing webhooks bypass notification
-        policies entirely, so the check has to be repeated here.
+        Two independent triggers, either of which suppresses:
+          * the priority is not in AFTER_HOURS_AUDIBLE_PRIORITIES, or
+          * the alert carries one of AFTER_HOURS_SILENT_TAGS.
+
+        The tag check exists so an alerting platform that already marks alerts
+        as deferrable stays the source of truth.  JSM, for instance, tags such
+        alerts and defers them via a notification policy — but outgoing
+        webhooks are not subject to notification policies, so this service
+        would otherwise announce alerts JSM has deliberately held.
         """
-        if not self.settings._business_hours or not self._after_hours_silent_tags:
+        # BUSINESS_HOURS_WINDOW is the master switch.
+        if not self.settings._business_hours:
             return False
 
         # Inside office hours — announce normally.
         if in_any_day_window(datetime.now(), self.settings._business_hours):
             return False
 
-        # High-priority alerts stay audible around the clock.
-        if payload.alert.priority in self._after_hours_override_priorities:
-            return False
+        # Tagged as deferrable by the upstream alerting platform.
+        if self._after_hours_silent_tags:
+            tags = {str(t).strip().lower() for t in payload.alert.tags}
+            if tags & self._after_hours_silent_tags:
+                return True
 
-        tags = {str(t).strip().lower() for t in payload.alert.tags}
-        return bool(tags & self._after_hours_silent_tags)
+        # Otherwise suppress unless the priority is explicitly audible.
+        return payload.alert.priority not in self._after_hours_audible_priorities
 
     # ── Deduplication ─────────────────────────────────────────────────────
 
@@ -612,8 +620,8 @@ class AlertProcessor:
         # alert is never made audible by that override.
         if not silent and self._suppress_after_hours(payload):
             logger.info(
-                "After-hours suppression — alert %s (priority=%s) is tagged for "
-                "business hours only; announcing silently",
+                "After-hours suppression — alert %s (priority=%s) arrived outside "
+                "BUSINESS_HOURS_WINDOW; announcing silently",
                 payload.alert.alertId,
                 payload.alert.priority,
             )

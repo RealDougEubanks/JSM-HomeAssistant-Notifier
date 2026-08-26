@@ -1,12 +1,13 @@
 """
 Tests for after-hours suppression and weekday-aware business-hours windows.
 
-Background
-──────────
-JSM's "Business Hours Only" alert policy tags P3/P4/P5 alerts with
-``business-hours-only``; a notification policy then defers those to the next
-weekday morning.  Outgoing webhooks bypass notification policies, so this
-service repeats the check locally.  These tests pin that behaviour.
+Two independent suppression triggers are covered:
+  * priority — outside business hours only AFTER_HOURS_AUDIBLE_PRIORITIES speak
+  * tags     — optional, for honouring an upstream platform's own decision
+
+The tag path exists because JSM tags deferrable alerts and holds them via a
+notification policy, but outgoing webhooks are not subject to notification
+policies — so without a local check this service announces what JSM held.
 """
 
 from __future__ import annotations
@@ -124,82 +125,105 @@ def _at(dt: datetime):
     return patch("src.alert_processor.datetime", m)
 
 
-def test_tagged_p3_suppressed_overnight():
+# ── Priority-based suppression (the out-of-the-box behaviour) ────────────
+
+
+def test_p3_suppressed_overnight_with_no_tags_at_all():
+    """The default path: a new user sets only BUSINESS_HOURS_WINDOW."""
     proc = _proc()
-    payload = make_alert(priority="P3", tags=["business-hours-only", "Cloudwatch"])
+    payload = make_alert(priority="P3")
     with _at(_MON_EARLY):
         assert proc._suppress_after_hours(payload) is True
 
 
-def test_tagged_p3_not_suppressed_during_business_hours():
+def test_p3_not_suppressed_during_business_hours():
     proc = _proc()
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
+    payload = make_alert(priority="P3")
     with _at(_MON):
         assert proc._suppress_after_hours(payload) is False
 
 
-def test_tagged_p3_suppressed_on_weekend_afternoon():
+def test_p3_suppressed_on_weekend_afternoon():
     """A plain time-of-day silent window could not express this."""
     proc = _proc()
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
+    payload = make_alert(priority="P3")
     with _at(_SAT_NOON):
         assert proc._suppress_after_hours(payload) is True
 
 
-def test_untagged_alert_never_suppressed():
+def test_p1_stays_audible_overnight():
     proc = _proc()
-    payload = make_alert(priority="P3", tags=["Cloudwatch"])
+    payload = make_alert(priority="P1")
     with _at(_MON_EARLY):
         assert proc._suppress_after_hours(payload) is False
 
 
-def test_p1_stays_audible_overnight_even_if_tagged():
+def test_p2_stays_audible_overnight_by_default():
+    proc = _proc()
+    payload = make_alert(priority="P2")
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is False
+
+
+def test_audible_priorities_configurable():
+    """Narrowing to P1 means an overnight P2 is suppressed too."""
+    proc = _proc(after_hours_audible_priorities="P1")
+    payload = make_alert(priority="P2")
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is True
+
+
+def test_empty_audible_priorities_silences_everything():
+    proc = _proc(after_hours_audible_priorities="")
+    payload = make_alert(priority="P1")
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is True
+
+
+def test_disabled_when_business_hours_unset():
+    """Empty BUSINESS_HOURS_WINDOW is the master switch — feature fully off."""
+    proc = _proc(business_hours_window="")
+    payload = make_alert(priority="P5", tags=["business-hours-only"])
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is False
+
+
+# ── Tag-based suppression (optional platform parity) ─────────────────────
+
+
+def test_tag_suppresses_even_an_audible_priority():
+    """A tag overrides the audible-priority allowance — that is its purpose."""
+    proc = _proc(after_hours_silent_tags="business-hours-only")
+    payload = make_alert(priority="P1", tags=["business-hours-only"])
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is True
+
+
+def test_tag_ignored_during_business_hours():
+    proc = _proc(after_hours_silent_tags="business-hours-only")
+    payload = make_alert(priority="P1", tags=["business-hours-only"])
+    with _at(_MON):
+        assert proc._suppress_after_hours(payload) is False
+
+
+def test_tag_matching_is_case_insensitive():
+    proc = _proc(after_hours_silent_tags="business-hours-only")
+    payload = make_alert(priority="P1", tags=["Business-Hours-Only"])
+    with _at(_MON_EARLY):
+        assert proc._suppress_after_hours(payload) is True
+
+
+def test_tags_default_to_empty_so_priority_alone_decides():
+    """No tags configured by default — an audible P1 stays audible."""
     proc = _proc()
     payload = make_alert(priority="P1", tags=["business-hours-only"])
     with _at(_MON_EARLY):
         assert proc._suppress_after_hours(payload) is False
 
 
-def test_p2_stays_audible_by_default():
-    proc = _proc()
-    payload = make_alert(priority="P2", tags=["business-hours-only"])
-    with _at(_MON_EARLY):
-        assert proc._suppress_after_hours(payload) is False
-
-
-def test_override_priorities_configurable():
-    """With only P1 overriding, a tagged P2 is suppressed overnight."""
-    proc = _proc(after_hours_override_priorities="P1")
-    payload = make_alert(priority="P2", tags=["business-hours-only"])
-    with _at(_MON_EARLY):
-        assert proc._suppress_after_hours(payload) is True
-
-
-def test_tag_matching_is_case_insensitive():
-    proc = _proc()
-    payload = make_alert(priority="P3", tags=["Business-Hours-Only"])
-    with _at(_MON_EARLY):
-        assert proc._suppress_after_hours(payload) is True
-
-
-def test_disabled_when_business_hours_unset():
-    """Empty BUSINESS_HOURS_WINDOW disables the feature entirely."""
-    proc = _proc(business_hours_window="")
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
-    with _at(_MON_EARLY):
-        assert proc._suppress_after_hours(payload) is False
-
-
-def test_disabled_when_no_tags_configured():
-    proc = _proc(after_hours_silent_tags="")
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
-    with _at(_MON_EARLY):
-        assert proc._suppress_after_hours(payload) is False
-
-
-def test_custom_tag_name():
+def test_custom_tag_names_with_whitespace():
     proc = _proc(after_hours_silent_tags="defer-me , other")
-    payload = make_alert(priority="P3", tags=["defer-me"])
+    payload = make_alert(priority="P1", tags=["OTHER"])
     with _at(_MON_EARLY):
         assert proc._suppress_after_hours(payload) is True
 
@@ -207,14 +231,18 @@ def test_custom_tag_name():
 # ── End-to-end through process() ─────────────────────────────────────────
 
 
-async def test_process_suppresses_tts_but_keeps_notification():
-    """The GTDist regression: tagged P3 at 02:00 must not speak, but must post."""
-    proc = _proc()
+def _wire(proc: AlertProcessor) -> AlertProcessor:
     proc.ha_client.play_tts_alert = AsyncMock(return_value=True)
     proc.ha_client.send_persistent_notification = AsyncMock(return_value=True)
     proc.ha_client.fire_webhooks = AsyncMock(return_value=True)
+    return proc
 
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
+
+async def test_process_suppresses_tts_but_keeps_notification():
+    """The original regression: a P3 at 02:00 must not speak, but must post."""
+    proc = _wire(_proc())
+
+    payload = make_alert(priority="P3")
     with _at(_MON_EARLY):
         result = await proc.process(payload, always_notify=True)
 
@@ -226,12 +254,9 @@ async def test_process_suppresses_tts_but_keeps_notification():
 
 
 async def test_process_speaks_p1_overnight():
-    proc = _proc()
-    proc.ha_client.play_tts_alert = AsyncMock(return_value=True)
-    proc.ha_client.send_persistent_notification = AsyncMock(return_value=True)
-    proc.ha_client.fire_webhooks = AsyncMock(return_value=True)
+    proc = _wire(_proc())
 
-    payload = make_alert(priority="P1", tags=["business-hours-only"])
+    payload = make_alert(priority="P1")
     with _at(_MON_EARLY):
         result = await proc.process(payload, always_notify=True)
 
@@ -240,22 +265,33 @@ async def test_process_speaks_p1_overnight():
     proc.ha_client.play_tts_alert.assert_called_once()
 
 
-async def test_silent_override_cannot_unmute_a_deferred_alert():
+async def test_silent_override_cannot_unmute_a_suppressed_alert():
     """
-    SILENT_WINDOW_OVERRIDE_PRIORITIES must not resurrect an alert that JSM
-    would have deferred — otherwise the override reintroduces the 2am page.
+    SILENT_WINDOW_OVERRIDE_PRIORITIES must not resurrect an alert that
+    after-hours suppression muted — otherwise it reintroduces the 2am page.
     """
-    proc = _proc(
-        silent_window="22:00-07:00",
-        silent_window_override_priorities="P1,P2,P3",
+    proc = _wire(
+        _proc(
+            silent_window="22:00-07:00",
+            silent_window_override_priorities="P1,P2,P3",
+        )
     )
-    proc.ha_client.play_tts_alert = AsyncMock(return_value=True)
-    proc.ha_client.send_persistent_notification = AsyncMock(return_value=True)
-    proc.ha_client.fire_webhooks = AsyncMock(return_value=True)
 
-    payload = make_alert(priority="P3", tags=["business-hours-only"])
+    payload = make_alert(priority="P3")
     with _at(_MON_EARLY):
         result = await proc.process(payload, always_notify=True)
 
     assert result["announcement_mode"] == "silent"
     proc.ha_client.play_tts_alert.assert_not_called()
+
+
+async def test_process_unaffected_when_feature_disabled():
+    """Default config (no BUSINESS_HOURS_WINDOW) must behave exactly as before."""
+    proc = _wire(_proc(business_hours_window=""))
+
+    payload = make_alert(priority="P5")
+    with _at(_MON_EARLY):
+        result = await proc.process(payload, always_notify=True)
+
+    assert result["announcement_mode"] == "full"
+    proc.ha_client.play_tts_alert.assert_called_once()

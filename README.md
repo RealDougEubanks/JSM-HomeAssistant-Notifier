@@ -22,6 +22,7 @@ A lightweight Docker service that bridges **Jira Service Management (JSM / OpsGe
 - [Testing With curl](#testing-with-curl)
 - [Using With Other Webhook Sources](#using-with-other-webhook-sources)
 - [JSM Webhook Events Reference](#jsm-webhook-events-reference)
+- [Quiet Hours & After-Hours Suppression](#quiet-hours--after-hours-suppression)
 - [HA Automation Webhooks](#ha-automation-webhooks)
 - [Incident State Dashboard](#incident-state-dashboard)
 - [Running on unRAID (or any Docker host)](#running-on-unraid-or-any-docker-host)
@@ -82,6 +83,7 @@ JSM alert created / escalated
 - **Configurable announcement formats** — customise the detailed and terse TTS templates with placeholders
 - **Time-based quiet hours** — silent windows (no TTS) and terse windows (short format), with cross-midnight support
 - **Priority override for silent mode** — P1/P2 alerts can bypass silent windows so critical incidents always wake you
+- **After-hours suppression** — weekday-aware business hours (`Mon-Fri 09:00-17:00`) keep low-priority alerts from speaking outside office hours, including weekends. Fills the gap left by your alerting platform's quiet hours, which do not apply to outgoing webhooks — see [Quiet Hours & After-Hours Suppression](#quiet-hours--after-hours-suppression)
 - **Per-media-player routing** — route TTS to different speakers by time of day (e.g. bedroom at night, office during the day)
 - **Volume control** — set media player volume before TTS playback, with separate levels for full and terse modes
 - **Alert batching** — combine multiple alerts arriving within a configurable window into one TTS announcement
@@ -656,6 +658,114 @@ sleep 5
 curl -s -X POST "$URL" -H "Content-Type: application/json" \
   -d "{\"action\":\"Close\",\"alert\":{\"alertId\":\"$ID\",\"message\":\"Test lifecycle alert\"}}"
 ```
+
+---
+
+## Quiet Hours & After-Hours Suppression
+
+> **Read this before you go to production.** By default this service announces **every** alert that reaches it, aloud, at full volume — including a P4 disk-space warning at 3am. If you are wired to a real on-call rotation, configure `BUSINESS_HOURS_WINDOW` below.
+
+### Why your alerting platform's quiet hours do not protect you
+
+This is the single most common way people get burned by this project, so it is worth being explicit.
+
+Most alerting platforms (JSM/Opsgenie, PagerDuty, Grafana OnCall) let you defer or suppress low-priority notifications outside office hours. Those rules apply to **the platform's own delivery channels** — mobile push, email, SMS.
+
+**Outgoing webhooks are not one of those channels.** A webhook fires the instant the alert is created, before and independent of any notification policy, deferral, or quiet-hours rule.
+
+The result is a trap:
+
+```
+ 3:00am   P3 alert created
+          ├─ platform notification policy → "defer to 09:00" → teammates sleep ✅
+          └─ outgoing webhook            → fires immediately  → YOUR SPEAKER 🔊
+```
+
+Your whole team is protected by the platform rule. You are not, because you are the only one on the webhook. It looks like the alert is "only alerting here" — and it is, by design.
+
+**So the suppression has to be re-implemented on this side.** That is what this section configures.
+
+### Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BUSINESS_HOURS_WINDOW` | *(empty — feature off)* | Master switch. Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00` |
+| `AFTER_HOURS_AUDIBLE_PRIORITIES` | `P1,P2` | Outside those hours, only these speak aloud |
+| `AFTER_HOURS_SILENT_TAGS` | *(empty)* | Optional. Tags that force silence even for an audible priority |
+
+Minimal setup — this is all most people need:
+
+```env
+TZ=America/New_York
+BUSINESS_HOURS_WINDOW=Mon-Fri 09:00-17:00
+AFTER_HOURS_AUDIBLE_PRIORITIES=P1,P2
+```
+
+Outside Mon–Fri 09:00–17:00, a P3/P4/P5 **still posts the persistent HA notification and still updates the status light — it just makes no sound.** Nothing is lost; you see it when you wake up. P1 and P2 still wake you, because they should.
+
+> `TZ` matters. Windows are evaluated in the container's local time, and the container defaults to **UTC**. Without `TZ` your "business hours" will be silently wrong by your UTC offset.
+
+### `BUSINESS_HOURS_WINDOW` vs `SILENT_WINDOW` — pick the right one
+
+These look similar and are easy to confuse. The difference has bitten people.
+
+| | `SILENT_WINDOW` | `BUSINESS_HOURS_WINDOW` |
+|---|---|---|
+| Knows the day of week | ❌ no | ✅ yes |
+| Knows alert priority | via `SILENT_WINDOW_OVERRIDE_PRIORITIES` | via `AFTER_HOURS_AUDIBLE_PRIORITIES` |
+| Mutes 02:00 Tuesday | ✅ | ✅ |
+| Mutes **14:00 Saturday** | ❌ **fully audible** | ✅ |
+
+`SILENT_WINDOW=22:00-06:00` only understands clock time, so a Saturday afternoon P4 sails straight through. If you want "outside office hours", you need `BUSINESS_HOURS_WINDOW`.
+
+Also beware: `TERSE_WINDOW` does **not** make anything quiet. It only shortens the spoken text — a terse alert is still spoken at full volume. Setting `TERSE_WINDOW` overnight and expecting silence is a common mistake.
+
+You can use both settings together. After-hours suppression is applied **after** `SILENT_WINDOW_OVERRIDE_PRIORITIES`, so that override can never resurrect an alert suppression has muted.
+
+### Window format
+
+```
+Mon-Fri 09:00-17:00                    # weekdays, 9 to 5
+Mon-Fri 08:00-18:00, Sat 10:00-14:00   # plus Saturday mornings
+Fri 17:00-09:00                        # crosses midnight into Saturday
+Mon-Sun 00:00-23:59                    # always "business hours" (feature effectively off)
+```
+
+Day names are `Mon`–`Sun`. Ranges wrap the week, so `Fri-Mon` means Fri, Sat, Sun **and** Mon. For windows crossing midnight the weekday matches the day the window *started*, so `Fri 17:00-09:00` covers early Saturday morning.
+
+### Optional — honouring tags from your alerting platform
+
+If your platform already decides which alerts are deferrable, you can honour that decision instead of duplicating the rule here.
+
+For example, a JSM alert policy can tag matching alerts `business-hours-only`, and a notification policy defers anything with that tag to the next weekday. Name the tag here and this service follows the same decision:
+
+```env
+AFTER_HOURS_SILENT_TAGS=business-hours-only
+```
+
+Your alerting platform stays the single source of truth — widen or narrow the policy there and this service tracks it with no config change. Tags are matched case-insensitively, and any tag listed here forces silence **even if** the alert's priority appears in `AFTER_HOURS_AUDIBLE_PRIORITIES`.
+
+Most users should leave this empty and rely on priority alone.
+
+### Verifying it works
+
+Send an off-hours test and confirm nothing is spoken:
+
+```bash
+curl -s -X POST "http://localhost:8080/alert?mode=always&key=$WEBHOOK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"Create","alert":{"alertId":"quiet-test-1",
+       "message":"After-hours suppression test","priority":"P3"}}' | jq
+```
+
+With suppression active you get `"announcement_mode": "silent"` and `"suppressed_after_hours": true`, and the logs show:
+
+```
+After-hours suppression — alert quiet-test-1 (priority=P3) arrived outside
+BUSINESS_HOURS_WINDOW; announcing silently
+```
+
+The HA persistent notification should still appear. Repeat with `"priority":"P1"` and you should get `"announcement_mode": "full"` plus audible TTS.
 
 ---
 

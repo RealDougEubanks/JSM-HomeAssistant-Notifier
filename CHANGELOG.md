@@ -6,28 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **After-hours suppression, for parity with JSM notification policies.** JSM's
-  *Business Hours Only* alert policy tags low-priority alerts with
-  `business-hours-only`, and a notification policy defers those to the next
-  weekday morning. Outgoing webhooks bypass notification policies entirely, so
-  this service was announcing P3 alerts at 02:00 that JSM had deliberately held
-  until 09:00 — the on-call engineer's phone stayed quiet while the speaker did
-  not.
+- **After-hours suppression** — stops low-priority alerts speaking aloud outside
+  office hours.
 
-  Three new settings, all optional and disabled by default:
+  Alerting platforms let you defer low-priority notifications overnight, but
+  those rules apply only to the platform's own channels (mobile, email, SMS).
+  Outgoing webhooks are not one of them: they fire the instant the alert is
+  created, before any notification policy runs. So an entire team can be
+  protected by a platform rule while the person wired to the webhook is woken at
+  02:00 by a P3 everyone else's phone held until 09:00.
+
+  Three new settings, all optional; the feature is **off unless
+  `BUSINESS_HOURS_WINDOW` is set**, so existing deployments are unaffected:
 
   | Setting | Default | Purpose |
   |---|---|---|
-  | `BUSINESS_HOURS_WINDOW` | *(empty, disabled)* | Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00` |
-  | `AFTER_HOURS_SILENT_TAGS` | `business-hours-only` | Tags that trigger suppression, matched case-insensitively |
-  | `AFTER_HOURS_OVERRIDE_PRIORITIES` | `P1,P2` | Priorities that stay audible around the clock |
+  | `BUSINESS_HOURS_WINDOW` | *(empty — feature off)* | Master switch. Weekday-aware office hours, e.g. `Mon-Fri 09:00-17:00` |
+  | `AFTER_HOURS_AUDIBLE_PRIORITIES` | `P1,P2` | Outside those hours, only these are spoken aloud |
+  | `AFTER_HOURS_SILENT_TAGS` | *(empty)* | Optional. Tags forcing silence even for an audible priority |
 
   Suppressed alerts still post the persistent HA notification and still update
   the status light — only TTS is withheld, so nothing is lost overnight.
 
-  The check keys off the tag JSM already applies rather than re-implementing the
-  priority list, so JSM remains the single source of truth: change the policy in
-  JSM and this service follows with no code change.
+  `AFTER_HOURS_SILENT_TAGS` is for honouring an upstream platform's own
+  decision: JSM alert policies can tag deferrable alerts, and naming that tag
+  here keeps the platform as the single source of truth. Most users need only
+  the priority setting.
 
 - **Weekday-aware time windows** (`parse_day_windows`, `in_any_day_window` in
   `src/time_windows.py`). Existing windows are time-of-day only, which cannot
@@ -35,10 +39,17 @@ All notable changes to this project will be documented in this file.
   leaves 14:00 Saturday audible. Day ranges wrap the week, so `Fri-Mon` covers
   Fri, Sat, Sun and Mon.
 
+### Documentation
+
+- New README section, **Quiet Hours & After-Hours Suppression**, explaining why a
+  platform's quiet hours do not cover webhooks, and comparing
+  `BUSINESS_HOURS_WINDOW` against `SILENT_WINDOW` and `TERSE_WINDOW` — the latter
+  shortens speech but does **not** silence it, a common source of 3am surprises.
+
 ### Notes
 
 - After-hours suppression is applied *after* `SILENT_WINDOW_OVERRIDE_PRIORITIES`
-  so that override cannot resurrect an alert JSM would have deferred.
+  so that override cannot resurrect an alert suppression has muted.
 - `make_alert()` in `tests/conftest.py` gained a `tags` parameter.
 
 ## [3.0.0] — 2026-07-31

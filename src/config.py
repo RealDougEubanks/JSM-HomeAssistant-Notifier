@@ -158,27 +158,33 @@ class Settings(BaseSettings):
     # silent windows).  Comma-separated, e.g. "P1" or "P1,P2".
     silent_window_override_priorities: str = ""
 
-    # ── After-hours suppression (JSM notification-policy parity) ─────────
-    # JSM's "Business Hours Only" alert policy tags low-priority alerts, and a
-    # notification policy then defers those notifications to the next weekday
-    # morning.  Outgoing webhooks are NOT subject to notification policies, so
-    # this service would otherwise announce alerts JSM has deliberately held.
+    # ── After-hours suppression ───────────────────────────────────────────
+    # Stops low-priority alerts from speaking aloud outside office hours.
     #
-    # BUSINESS_HOURS_WINDOW defines office hours (weekday-aware, unlike
-    # SILENT_WINDOW which is time-of-day only and so cannot mute weekends).
+    # BUSINESS_HOURS_WINDOW is the master switch: leave it empty (default) and
+    # after-hours suppression is disabled entirely.  It is weekday-aware,
+    # unlike SILENT_WINDOW which is time-of-day only and therefore cannot mute
+    # a Saturday afternoon.
     #   Example: "Mon-Fri 09:00-17:00"
-    # Leave empty to disable after-hours suppression entirely.
     business_hours_window: str = ""
 
-    # Alerts carrying ANY of these tags are announced silently (persistent
-    # HA notification only, no TTS) outside BUSINESS_HOURS_WINDOW.
-    # Comma-separated.  Matching is case-insensitive.
-    # Default mirrors the tag JSM's alert policy already applies.
-    after_hours_silent_tags: str = "business-hours-only"
+    # Outside business hours, ONLY these priorities are announced aloud.
+    # Everything else posts the HA notification silently (no TTS).
+    # Comma-separated.  Empty means nothing is audible outside business hours.
+    after_hours_audible_priorities: str = "P1,P2"
 
-    # Priorities that stay audible outside business hours regardless of tags.
-    # Comma-separated, e.g. "P1" or "P1,P2".  Leave empty for no override.
-    after_hours_override_priorities: str = "P1,P2"
+    # Optional.  Alerts carrying ANY of these tags are silenced outside
+    # business hours even if their priority appears in
+    # AFTER_HOURS_AUDIBLE_PRIORITIES.  Comma-separated, case-insensitive.
+    #
+    # Use this when your alerting platform already marks alerts as deferrable
+    # and you want to honour that decision rather than duplicate it here.  For
+    # example JSM's "Business Hours Only" alert policy tags matching alerts
+    # with `business-hours-only`, and a notification policy defers them to the
+    # next weekday — but outgoing webhooks are NOT subject to notification
+    # policies, so without this the service announces alerts JSM has held.
+    # Setting the tag here keeps your alerting platform the source of truth.
+    after_hours_silent_tags: str = ""
 
     # Parsed window lists — populated by the model validator below.
     _silent_windows: list[Window] = []
