@@ -210,14 +210,18 @@ git revert HEAD
 docker compose up -d --build
 ```
 
-To roll back to a published image instead of building, pin the previous release
-tag in `docker-compose.yml` and pull it:
+To roll back to a published image instead of building, pin the **previous**
+release tag in `docker-compose.yml` and pull it:
 
 ```bash
 # In docker-compose.yml, comment out `build: .` and set:
-#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.0.0
+#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.0.0   <-- previous release
 docker compose pull && docker compose up -d
 ```
+
+> This example deliberately names the release **before** the current one. Current
+> is `3.1.0`, so rolling back means `3.0.0`. Do not "correct" this to match the
+> current version — that would pin you to the release you are trying to escape.
 
 Published tags are listed at
 <https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/pkgs/container/jsm-ha-notifier>.
