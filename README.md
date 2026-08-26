@@ -1314,13 +1314,13 @@ The release workflow also pushes to Docker Hub if credentials are configured.  T
 1. Create a Docker Hub access token at <https://hub.docker.com/settings/security>
 2. In your GitHub repo, go to **Settings** > **Secrets and variables** > **Actions**
 3. Add these secrets/variables:
-   - **Variable** `DOCKERHUB_USERNAME` = your Docker Hub username (e.g. `realdougeubanks`)
+   - **Variable** `DOCKERHUB_USERNAME` = your Docker Hub username (e.g. `dougeubanks`)
    - **Secret** `DOCKERHUB_TOKEN` = the access token from step 1
 
 Once configured, every release pushes to both registries:
 ```
 docker pull ghcr.io/realdougeubanks/jsm-ha-notifier:latest
-docker pull realdougeubanks/jsm-ha-notifier:latest
+docker pull dougeubanks/jsm-ha-notifier:latest
 ```
 
 If Docker Hub credentials are not set, the workflow gracefully skips the Docker Hub login and only pushes to GHCR.
@@ -1351,12 +1351,12 @@ release tag so `docker compose pull` never silently swaps the code under you:
 ```yaml
 services:
   jsm-ha-notifier:
-    image: ghcr.io/realdougeubanks/jsm-ha-notifier:1.3.0
+    image: ghcr.io/realdougeubanks/jsm-ha-notifier:v3.1.0
     # build: .   ← comment out or remove this line
 ```
 
 To update, bump the tag and re-run `docker compose up -d`. Floating tags
-(`:1.3`, `:1`, `:latest`) auto-update on pull — convenient, but you are
+(`:3.1`, `:3`, `:latest`) auto-update on pull — convenient, but you are
 trusting every future release; `:latest` is not recommended for unattended
 deployments.
 

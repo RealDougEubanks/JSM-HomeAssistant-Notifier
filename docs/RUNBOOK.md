@@ -215,7 +215,7 @@ release tag in `docker-compose.yml` and pull it:
 
 ```bash
 # In docker-compose.yml, comment out `build: .` and set:
-#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.0.0   <-- previous release
+#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:v3.0.0   <-- previous release
 docker compose pull && docker compose up -d
 ```
 
