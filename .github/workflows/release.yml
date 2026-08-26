@@ -90,21 +90,30 @@ jobs:
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#readme
 
-      # ── Build & push ────────────────────────────────────────────────────
-      - name: Build and push Docker image
+      # ── Build & push by digest (deliberately untagged) ──────────────────
+      # Tags are published in a later step, only AFTER signing succeeds, so a
+      # user-facing tag can never resolve to an unsigned image.
+      #
+      # Previously this pushed all tags immediately and signed afterwards. A
+      # transient Sigstore OIDC failure then left :latest published but
+      # unsigned, while `cosign verify ...:latest` — the command README tells
+      # users to run — failed. Only the job went red; the image was already
+      # live. Pushing by digest first closes that window.
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           # Layer caching via GitHub Actions cache
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       # ── Image signing with cosign (keyless / Sigstore) ──────────────────
+      # No `continue-on-error` here by design: if signing fails the job stops
+      # and the tag-publish step below never runs.
       - name: Sign image with cosign
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -113,6 +122,46 @@ jobs:
           # This proves the image was built by this GitHub Actions workflow.
           cosign sign --yes \
             "${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}@${DIGEST}"
+
+      - name: Verify signature before publishing tags
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # `cosign sign` can exit 0 without a verifiable signature landing in
+          # the registry. Verify against the registry so the gate depends on
+          # the published artefact, not on the signing command's exit code.
+          cosign verify \
+            --certificate-identity-regexp \
+              "^https://github.com/${{ github.repository }}/\.github/workflows/" \
+            --certificate-oidc-issuer \
+              "https://token.actions.githubusercontent.com" \
+            "${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}@${DIGEST}" > /dev/null
+
+      # ── Publish tags (only reached when the image is signed) ────────────
+      - name: Publish tags
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          SOURCE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            # Skip Docker Hub tags when no credentials are configured — the
+            # login step is also skipped, so pushing them would fail.
+            case "$tag" in
+              ghcr.io/*) ;;
+              *) [ "${HAS_DOCKERHUB:-false}" = "true" ] || { echo "skip (no Docker Hub creds): $tag"; continue; } ;;
+            esac
+            args+=( --tag "$tag" )
+          done <<< "$TAGS"
+
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "::error::No tags to publish"; exit 1
+          fi
+
+          docker buildx imagetools create "${args[@]}" "${SOURCE}@${DIGEST}"
 
       # ── SLSA build provenance attestation ───────────────────────────────
       - name: Generate SLSA provenance attestation
@@ -206,7 +255,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Signed:** cosign keyless (Sigstore OIDC)" >> $GITHUB_STEP_SUMMARY
+          echo "**Signed:** cosign keyless (Sigstore OIDC) — verified before tags were published" >> $GITHUB_STEP_SUMMARY
           echo "**Provenance:** SLSA Build Level 2 (GitHub attestation)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Verify with:" >> $GITHUB_STEP_SUMMARY
