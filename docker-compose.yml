@@ -22,8 +22,8 @@ services:
     # Pin to a specific release so `docker compose pull` never silently
     # swaps the code under you (supply-chain safety).  Comment out the two
     # lines above and uncomment the one below, bumping the tag each release.
-    # Floating alternatives: :3.0  (minor) or :3  (major) for auto-updates.
-    # image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.1.0
+    # Floating alternatives: :3.1  (minor) or :3  (major) for auto-updates.
+    # image: ghcr.io/realdougeubanks/jsm-ha-notifier:v3.1.0
     container_name: jsm-ha-notifier
     restart: unless-stopped
 
