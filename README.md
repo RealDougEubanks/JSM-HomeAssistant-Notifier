@@ -1,3 +1,9 @@
+<!--
+doc: README
+last-refreshed: 2026-08-26
+generated-by: doc-refresh skill
+-->
+
 # JSM Home Assistant Notifier
 
 [![CI](https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/RealDougEubanks/JSM-HomeAssistant-Notifier/actions/workflows/ci.yml)
@@ -1561,6 +1567,25 @@ Copy the exact name into `.env` and restart.
 
 ### No audio / TTS not playing
 
+**Check first: was it silenced on purpose?** Several settings suppress TTS by design, and each still posts the HA notification — so a missing announcement is often correct behaviour, not a fault. Rule these out before debugging tokens.
+
+| Response field / log line | Meaning | This is |
+|---|---|---|
+| `"suppressed_after_hours": true` | Outside `BUSINESS_HOURS_WINDOW` and the priority is not in `AFTER_HOURS_AUDIBLE_PRIORITIES` | working as configured |
+| `"announcement_mode": "silent"` | Inside a `SILENT_WINDOW` | working as configured |
+| `"announcement_mode": "terse"` | Inside a `TERSE_WINDOW` — **audio still plays**, just shorter | working as configured |
+| `"reason": "not on-call for any watched schedule"` | You are not on-call, so no announcement | working as configured |
+| `"batched": true` | Queued for up to `ALERT_BATCH_WINDOW_SECONDS` before speaking | working as configured |
+
+```bash
+# Grep for a deliberate suppression
+docker compose logs jsm-ha-notifier | grep -E "After-hours suppression|Silent window|No notification"
+```
+
+> If `BUSINESS_HOURS_WINDOW` is set but `TZ` is not, the container evaluates windows in **UTC** and your office hours will be wrong by your UTC offset. `TZ` is read at process start, so `POST /reload` will not pick up a change — recreate the container.
+
+If none of the above applies, then debug the connection:
+
 1. Verify the HA token is valid:
    ```bash
    curl -H "Authorization: Bearer YOUR_HA_TOKEN" https://your-ha-url/api/
@@ -1572,6 +1597,14 @@ Copy the exact name into `.env` and restart.
      | python3 -m json.tool | grep media_player
    ```
 3. Check service logs: `docker compose logs -f jsm-ha-notifier`
+
+### An alert announced overnight that should not have
+
+Your alerting platform's quiet hours do **not** cover this service. Notification policies govern the platform's own channels (mobile, email, SMS); outgoing webhooks fire at alert creation and bypass them entirely — so your whole team can be protected by a deferral rule while you are not.
+
+Fix: set `BUSINESS_HOURS_WINDOW`. See [Quiet Hours & After-Hours Suppression](#quiet-hours--after-hours-suppression) for the full explanation.
+
+> Setting `TERSE_WINDOW` will **not** fix this. Terse only shortens the spoken text — it still plays at full volume.
 
 ### HA shows "Playing Default Media Receiver"
 
@@ -1717,6 +1750,7 @@ jsm-ha-notifier/
 │   ├── test_announcement_format.py     # Format, time windows, priority override, repeat
 │   ├── test_robustness.py              # Security: sanitization, safe formatter, emoji toggle
 │   ├── test_incident_store.py          # Incident store, webhooks, force-close, retention
+│   ├── test_after_hours.py             # Business-hours windows, after-hours suppression
 │   └── test_time_windows.py            # Window parsing, player routing
 ├── docs/
 │   ├── RUNBOOK.md          # 2am operational guide — start here when paged

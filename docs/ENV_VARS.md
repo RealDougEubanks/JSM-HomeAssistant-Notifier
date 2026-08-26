@@ -1,6 +1,6 @@
 <!--
 doc: ENV_VARS
-last-refreshed: 2026-07-31
+last-refreshed: 2026-08-26
 generated-by: doc-refresh skill
 -->
 

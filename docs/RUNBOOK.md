@@ -1,6 +1,6 @@
 <!--
 doc: RUNBOOK
-last-refreshed: 2026-07-31
+last-refreshed: 2026-08-26
 generated-by: doc-refresh skill
 -->
 
@@ -113,6 +113,11 @@ anything in `docker-compose.yml`.
 | Log shows `Startup check: JSM API — FAILED` | `JSM_API_TOKEN` is expired or revoked, or `JSM_CLOUD_ID` is wrong | Generate a new Atlassian API token, update `.env`, then `POST /reload`. |
 | Log shows `Startup check: HA API — FAILED` | `HA_TOKEN` expired, or `HA_URL` unreachable from the container | Verify `curl -H "Authorization: Bearer $HA_TOKEN" $HA_URL/api/` works from the Docker host. |
 | Alerts arrive in JSM but nothing is spoken | You are not on-call for any schedule in `CHECK_ONCALL_SCHEDULE_NAMES` — this is correct behaviour | Check `/status` for the resolved on-call state. Use the `?mode=always` webhook URL for schedules that must always page you. |
+| **A low-priority alert was announced in the middle of the night, and nobody else on the team was paged for it** | Your alerting platform's quiet-hours or deferral policy applies only to **its own** channels — mobile, email, SMS. Outgoing webhooks fire at alert creation and bypass notification policies entirely, so you are the only person not protected by that rule | Set `BUSINESS_HOURS_WINDOW` (e.g. `Mon-Fri 09:00-17:00`). Outside it only `AFTER_HOURS_AUDIBLE_PRIORITIES` (default `P1,P2`) speak. See [ENV_VARS.md](ENV_VARS.md#after-hours-suppression). |
+| Set `TERSE_WINDOW` overnight and it still speaks aloud | `TERSE_WINDOW` only **shortens** the spoken text. It does not silence anything — a terse announcement plays at full volume | Use `SILENT_WINDOW` for clock-time silence, or `BUSINESS_HOURS_WINDOW` for weekday-aware office hours. `TERSE_WINDOW` is a verbosity control, not a mute. |
+| Nothing is spoken outside office hours and you expected it to be | `BUSINESS_HOURS_WINDOW` is set and the alert's priority is not in `AFTER_HOURS_AUDIBLE_PRIORITIES` — working as configured | Check the response for `"suppressed_after_hours": true`, or grep logs for `After-hours suppression`. Widen `AFTER_HOURS_AUDIBLE_PRIORITIES` if a priority should always wake you. |
+| Business hours appear shifted by several hours | `TZ` is unset, so the container runs in **UTC** and evaluates every window against UTC time | Set `TZ` (e.g. `TZ=America/New_York`) in `.env`, then recreate the container. `TZ` is read at process start — `POST /reload` will not pick it up. |
+| A weekend afternoon alert is audible despite a silent window | `SILENT_WINDOW` is time-of-day only and has no concept of weekdays, so `22:00-06:00` leaves Saturday 14:00 fully audible | Use `BUSINESS_HOURS_WINDOW`, which is weekday-aware. |
 | Log shows `Schedule '<name>' not found — skipping on-call check` | A name in `CHECK_ONCALL_SCHEDULE_NAMES` does not match JSM exactly | Names are case- and whitespace-sensitive. Copy the exact name from the JSM Ops schedule list. |
 | Log shows `Request rejected — invalid or missing API key`, caller gets `404` | Caller sent the wrong `WEBHOOK_API_KEY`, or none | The `404` is deliberate — it hides endpoint existence from scanners. Fix the key on the caller. |
 | Caller gets HTTP `429` | Per-IP rate limit exceeded (default 60 requests / 60 s) | Expected under burst or abuse. Raise `RATE_LIMIT_REQUESTS` if legitimate traffic is being throttled. |
@@ -150,6 +155,11 @@ rather than restarting.
 Send a synthetic alert and confirm it is spoken. This uses the always-notify
 path so it works whether or not you are currently on-call.
 
+> **Use `P1`.** If you are reading this at 2am and `BUSINESS_HOURS_WINDOW` is
+> set, a `P3` test is **deliberately silenced** and you will hear nothing — which
+> looks exactly like a broken service. `P1` is audible around the clock under the
+> default `AFTER_HOURS_AUDIBLE_PRIORITIES=P1,P2`.
+
 ```bash
 curl -X POST "http://localhost:8080/alert?mode=always" \
   -H "X-API-Key: $WEBHOOK_API_KEY" \
@@ -159,14 +169,28 @@ curl -X POST "http://localhost:8080/alert?mode=always" \
     "alert": {
       "alertId": "runbook-test-001",
       "message": "Runbook verification test",
-      "priority": "P3",
+      "priority": "P1",
       "entity": "runbook"
     }
   }'
 ```
 
 You should hear the announcement on the media player named by
-`HA_MEDIA_PLAYER_ENTITY`. Then close it so it does not linger in the dashboard:
+`HA_MEDIA_PLAYER_ENTITY`.
+
+The JSON response tells you what the service decided, which is faster than
+guessing from silence:
+
+| Field | Meaning |
+|-------|---------|
+| `"notified": true` | The routing logic chose to alert you |
+| `"announcement_mode": "full"` | Spoken with the full announcement format |
+| `"announcement_mode": "terse"` | Spoken, but shortened — **still audible** |
+| `"announcement_mode": "silent"` | No TTS. Persistent notification only |
+| `"suppressed_after_hours": true` | Silenced by `BUSINESS_HOURS_WINDOW` — not a fault |
+| `"reason": "not on-call for any watched schedule"` | Correct behaviour, not a fault |
+
+Then close it so it does not linger in the dashboard:
 
 ```bash
 curl -X POST -H "X-API-Key: $WEBHOOK_API_KEY" \
@@ -191,7 +215,7 @@ tag in `docker-compose.yml` and pull it:
 
 ```bash
 # In docker-compose.yml, comment out `build: .` and set:
-#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:2.3.0
+#   image: ghcr.io/realdougeubanks/jsm-ha-notifier:3.0.0
 docker compose pull && docker compose up -d
 ```
 

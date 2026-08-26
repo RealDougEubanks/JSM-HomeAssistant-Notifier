@@ -615,9 +615,8 @@ class AlertProcessor:
             )
             silent = False
 
-        # After-hours suppression mirrors JSM's notification policy and is
-        # applied AFTER the silent-window override so a business-hours-only
-        # alert is never made audible by that override.
+        # Applied AFTER the silent-window override so that override can never
+        # make an after-hours-suppressed alert audible again.
         if not silent and self._suppress_after_hours(payload):
             logger.info(
                 "After-hours suppression — alert %s (priority=%s) arrived outside "
