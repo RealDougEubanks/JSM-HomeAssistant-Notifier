@@ -1,6 +1,6 @@
 <!--
 doc: SECURITY
-last-refreshed: 2026-07-31
+last-refreshed: 2026-08-26
 generated-by: doc-refresh skill
 -->
 
@@ -119,7 +119,8 @@ bandit -r src/ -c pyproject.toml
 `pip-audit` **blocks** the build on a vulnerable dependency. `bandit` and `mypy`
 are advisory and do not fail CI.
 
-Run both locally before opening a pull request:
+Neither `pip-audit` nor `bandit` is listed in `requirements-dev.txt` — CI installs
+them inline. Install them yourself before running the commands locally:
 
 ```bash
 pip install pip-audit bandit

@@ -1,6 +1,6 @@
 <!--
 doc: CONTRIBUTING
-last-refreshed: 2026-07-31
+last-refreshed: 2026-08-26
 generated-by: doc-refresh skill
 -->
 
@@ -74,6 +74,10 @@ full gate locally before pushing:
 | Dependency CVE scan | `pip-audit -r requirements.txt --desc` | Yes |
 | Type check | `mypy src/ --ignore-missing-imports` | No — advisory only |
 | Security scan | `bandit -r src/ -c pyproject.toml` | No — advisory only |
+
+> **`pip-audit` and `bandit` are not in `requirements-dev.txt`.** CI installs them
+> inline, so `pip install -r requirements-dev.txt` will not give you them. To
+> reproduce the full gate locally, first run `pip install pip-audit bandit`.
 
 > **Formatter version matters.** `black` changes its line-wrapping between major
 > releases, so an older local `black` can produce output that CI rejects. Install

@@ -30,7 +30,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from .time_windows import Window, parse_windows
+from .time_windows import DayWindow, Window, parse_day_windows, parse_windows
 
 # Fields that accept plain comma-separated strings in addition to JSON arrays.
 _CSV_FIELDS = frozenset({"always_notify_schedule_names", "check_oncall_schedule_names"})
@@ -158,9 +158,38 @@ class Settings(BaseSettings):
     # silent windows).  Comma-separated, e.g. "P1" or "P1,P2".
     silent_window_override_priorities: str = ""
 
+    # ── After-hours suppression ───────────────────────────────────────────
+    # Stops low-priority alerts from speaking aloud outside office hours.
+    #
+    # BUSINESS_HOURS_WINDOW is the master switch: leave it empty (default) and
+    # after-hours suppression is disabled entirely.  It is weekday-aware,
+    # unlike SILENT_WINDOW which is time-of-day only and therefore cannot mute
+    # a Saturday afternoon.
+    #   Example: "Mon-Fri 09:00-17:00"
+    business_hours_window: str = ""
+
+    # Outside business hours, ONLY these priorities are announced aloud.
+    # Everything else posts the HA notification silently (no TTS).
+    # Comma-separated.  Empty means nothing is audible outside business hours.
+    after_hours_audible_priorities: str = "P1,P2"
+
+    # Optional.  Alerts carrying ANY of these tags are silenced outside
+    # business hours even if their priority appears in
+    # AFTER_HOURS_AUDIBLE_PRIORITIES.  Comma-separated, case-insensitive.
+    #
+    # Use this when your alerting platform already marks alerts as deferrable
+    # and you want to honour that decision rather than duplicate it here.  For
+    # example JSM's "Business Hours Only" alert policy tags matching alerts
+    # with `business-hours-only`, and a notification policy defers them to the
+    # next weekday — but outgoing webhooks are NOT subject to notification
+    # policies, so without this the service announces alerts JSM has held.
+    # Setting the tag here keeps your alerting platform the source of truth.
+    after_hours_silent_tags: str = ""
+
     # Parsed window lists — populated by the model validator below.
     _silent_windows: list[Window] = []
     _terse_windows: list[Window] = []
+    _business_hours: list[DayWindow] = []
 
     # ── Media player routing ─────────────────────────────────────────────
     # Route TTS to different speakers by time of day.
@@ -272,6 +301,9 @@ class Settings(BaseSettings):
     def _parse_derived_fields(self) -> Settings:
         object.__setattr__(self, "_silent_windows", parse_windows(self.silent_window))
         object.__setattr__(self, "_terse_windows", parse_windows(self.terse_window))
+        object.__setattr__(
+            self, "_business_hours", parse_day_windows(self.business_hours_window)
+        )
         return self
 
     # ── Client construction mappings ─────────────────────────────────────────

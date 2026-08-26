@@ -37,7 +37,12 @@ from .ha_client import HAClient
 from .incident_store import IncidentStore
 from .jsm_client import JSMClient
 from .models import JSMWebhookPayload
-from .time_windows import in_any_window, parse_player_routing, resolve_player
+from .time_windows import (
+    in_any_day_window,
+    in_any_window,
+    parse_player_routing,
+    resolve_player,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +123,48 @@ class AlertProcessor:
             settings.silent_window_override_priorities
         )
         self._repeat_priorities = _parse_priority_set(settings.tts_repeat_priorities)
+        self._after_hours_audible_priorities = _parse_priority_set(
+            settings.after_hours_audible_priorities
+        )
+        self._after_hours_silent_tags = frozenset(
+            t.strip().lower()
+            for t in settings.after_hours_silent_tags.split(",")
+            if t.strip()
+        )
+
+    # ── After-hours suppression ───────────────────────────────────────────
+
+    def _suppress_after_hours(self, payload: JSMWebhookPayload) -> bool:
+        """
+        True when this alert should be announced silently because it arrived
+        outside business hours and does not warrant waking anyone.
+
+        Two independent triggers, either of which suppresses:
+          * the priority is not in AFTER_HOURS_AUDIBLE_PRIORITIES, or
+          * the alert carries one of AFTER_HOURS_SILENT_TAGS.
+
+        The tag check exists so an alerting platform that already marks alerts
+        as deferrable stays the source of truth.  JSM, for instance, tags such
+        alerts and defers them via a notification policy — but outgoing
+        webhooks are not subject to notification policies, so this service
+        would otherwise announce alerts JSM has deliberately held.
+        """
+        # BUSINESS_HOURS_WINDOW is the master switch.
+        if not self.settings._business_hours:
+            return False
+
+        # Inside office hours — announce normally.
+        if in_any_day_window(datetime.now(), self.settings._business_hours):
+            return False
+
+        # Tagged as deferrable by the upstream alerting platform.
+        if self._after_hours_silent_tags:
+            tags = {str(t).strip().lower() for t in payload.alert.tags}
+            if tags & self._after_hours_silent_tags:
+                return True
+
+        # Otherwise suppress unless the priority is explicitly audible.
+        return payload.alert.priority not in self._after_hours_audible_priorities
 
     # ── Deduplication ─────────────────────────────────────────────────────
 
@@ -567,6 +614,18 @@ class AlertProcessor:
                 payload.alert.alertId,
             )
             silent = False
+
+        # Applied AFTER the silent-window override so that override can never
+        # make an after-hours-suppressed alert audible again.
+        if not silent and self._suppress_after_hours(payload):
+            logger.info(
+                "After-hours suppression — alert %s (priority=%s) arrived outside "
+                "BUSINESS_HOURS_WINDOW; announcing silently",
+                payload.alert.alertId,
+                payload.alert.priority,
+            )
+            silent = True
+            result["suppressed_after_hours"] = True
 
         terse = not silent and in_any_window(now_time, self.settings._terse_windows)
 
