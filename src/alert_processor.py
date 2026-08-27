@@ -452,6 +452,75 @@ class AlertProcessor:
         )
         await self.ha_client.fire_webhooks(webhook_ids, self._alert_webhook_data(payload))
 
+    def _state_field_for_counts(self, counts: dict[str, int]) -> str:
+        """Map aggregate open-incident counts to the state webhook to fire."""
+        if counts["unacked"] > 0:
+            return "ha_webhook_on_create"
+        if counts["total_open"] > 0:
+            return "ha_webhook_on_acknowledge"
+        return "ha_webhook_on_close"
+
+    async def reconcile_state_webhook(self, reason: str = "startup") -> str | None:
+        """
+        Re-fire the state webhook matching current aggregate counts.
+
+        Unlike :meth:`_fire_state_webhooks` this is not tied to an incoming
+        alert, so it can run when no webhook has arrived.  It exists because
+        state webhooks are edge-triggered: they only fire when an event is
+        received.  If the service is offline while an alert is acknowledged or
+        closed, that edge is missed permanently and any downstream indicator —
+        a status light, say — stays wrong until the next unrelated event.
+
+        Called at startup and after each sync so the indicator is corrected
+        against the incident store rather than left stale.
+
+        Returns the settings field that was fired, or None if nothing was.
+        """
+        if not self.incident_store:
+            return None
+
+        try:
+            counts = await self.incident_store.get_open_counts()
+        except Exception as exc:
+            logger.error("Could not read incident counts to reconcile state: %s", exc)
+            return None
+
+        config_field = self._state_field_for_counts(counts)
+        webhook_ids = getattr(self.settings, config_field, "")
+        if not webhook_ids or not webhook_ids.strip():
+            return None
+
+        state = config_field.replace("ha_webhook_on_", "")
+        logger.info(
+            "Reconciling state webhook field=%s state=%s "
+            "(unacked=%d acked=%d total_open=%d) reason=%s",
+            config_field,
+            state,
+            counts["unacked"],
+            counts["acked"],
+            counts["total_open"],
+            reason,
+        )
+        await self.ha_client.fire_webhooks(
+            webhook_ids,
+            {
+                "event": "Reconcile",
+                "reason": reason,
+                "alert_id": "",
+                "message": f"Aggregate state reconciled ({reason})",
+                "priority": "",
+                "entity": "",
+                "description": "",
+                "source": "jsm-ha-notifier",
+                "tags": [],
+                "state": state,
+                "unacked_count": counts["unacked"],
+                "acked_count": counts["acked"],
+                "total_open": counts["total_open"],
+            },
+        )
+        return config_field
+
     async def _fire_state_webhooks(self, payload: JSMWebhookPayload) -> None:
         """
         Fire the state webhook that reflects the current AGGREGATE incident state.
@@ -485,12 +554,9 @@ class AlertProcessor:
                 config_field = "ha_webhook_on_acknowledge"
             else:
                 config_field = "ha_webhook_on_create"
-        elif counts["unacked"] > 0:
-            config_field = "ha_webhook_on_create"
-        elif counts["total_open"] > 0:
-            config_field = "ha_webhook_on_acknowledge"
         else:
-            config_field = "ha_webhook_on_close"
+            # Shared with reconcile_state_webhook so the two paths cannot drift.
+            config_field = self._state_field_for_counts(counts)
 
         webhook_ids = getattr(self.settings, config_field, "")
         if not webhook_ids or not webhook_ids.strip():

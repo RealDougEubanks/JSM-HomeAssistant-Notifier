@@ -802,6 +802,38 @@ Per-event webhooks (`ON_ESCALATE`, `ON_UPDATE`, `ON_SLA_BREACH`) fire for that s
 
 `EscalateNext` and `UnAcknowledge` fire **both**: their per-event webhook *and* a state webhook. So an escalation can flash the light (`ON_ESCALATE`) while the state webhook keeps it red, and an un-acknowledge fires `ON_UPDATE` while the state webhook drives the colour from yellow back to red.
 
+### Reconciliation — surviving downtime
+
+State webhooks are **edge-triggered**: they fire when an alert event arrives. If
+the service is offline while an alert is created, acknowledged or closed, that
+edge is missed permanently — the webhook was simply never delivered — and your
+light stays wrong until an unrelated alert happens to arrive.
+
+To close that gap the state is re-derived from the incident store and re-fired:
+
+| When | `reason` sent with the payload |
+|---|---|
+| Service startup | `startup` |
+| Scheduled sync, if `INCIDENT_SYNC_INTERVAL_MINUTES > 0` | `scheduled-sync` |
+| `POST /incidents/sync` | `manual-sync` |
+
+Startup reconciliation runs **regardless of `INCIDENT_SYNC_INTERVAL_MINUTES`**.
+JSM is treated as authoritative — the store is refreshed from the API first, then
+the webhook fires from the resulting counts.
+
+Reconcile payloads carry `event: "Reconcile"` and a `reason`, with the per-alert
+fields (`alert_id`, `priority`, `tags`) deliberately blank, since no single alert
+triggered them. Automations that key off `state` / `unacked_count` need no
+changes; one that reads `alert_id` should tolerate an empty value.
+
+Force one at any time:
+
+```bash
+curl -X POST -H "X-API-Key: $WEBHOOK_API_KEY" \
+  http://localhost:8080/incidents/sync
+# {"status":"synced","alerts_upserted":3,"state_webhook_fired":"ha_webhook_on_create"}
+```
+
 ### Trigger Variables
 
 Every webhook POST includes these fields accessible as `trigger.json.*` in your HA templates:
