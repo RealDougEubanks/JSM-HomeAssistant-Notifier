@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **State webhooks now reconcile at startup and after every sync.** They are
+  edge-triggered: they fire only when an alert event arrives. If the service was
+  offline while an alert was created, acknowledged or closed, that edge was
+  missed permanently — the store and any downstream indicator (a status light,
+  say) stayed wrong until an unrelated alert happened to arrive.
+
+  Three call sites now re-derive the state from the incident store and fire the
+  matching webhook without needing an incoming event:
+
+  | Trigger | Reason string |
+  |---|---|
+  | Service startup | `startup` |
+  | Scheduled sync (`INCIDENT_SYNC_INTERVAL_MINUTES`) | `scheduled-sync` |
+  | `POST /incidents/sync` | `manual-sync` |
+
+  Startup reconciliation runs **regardless of `INCIDENT_SYNC_INTERVAL_MINUTES`**,
+  which defaults to `0` (disabled) and, when enabled, waits a minute before its
+  first run. JSM is treated as authoritative: the store is refreshed from the
+  API first, then the webhook is fired from the resulting counts.
+
+- `POST /incidents/sync` now returns `state_webhook_fired` so a caller can tell
+  which state was published.
+
+### Changed
+
+- The count-to-state mapping is now shared between the event path and
+  reconciliation (`_state_field_for_counts`). The two were duplicated logic that
+  could drift; a test pins that they agree.
+
 ## [3.1.0] — 2026-08-26
 
 ### Added

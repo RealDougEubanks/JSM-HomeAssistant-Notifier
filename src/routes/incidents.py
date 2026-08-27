@@ -116,6 +116,14 @@ async def force_incident_sync(request: Request):
     incident_store = request.app.state.incident_store
     if not incident_store:
         raise HTTPException(status_code=404, detail=_DISABLED_DETAIL)
-    alerts = await request.app.state.processor.jsm_client.list_open_alerts()
+    processor = request.app.state.processor
+    alerts = await processor.jsm_client.list_open_alerts()
     count = await incident_store.bulk_upsert(alerts)
-    return {"status": "synced", "alerts_upserted": count}
+    # A manual sync exists to correct drift, so re-fire the state webhook too —
+    # otherwise the store is right but any status light stays wrong.
+    fired = await processor.reconcile_state_webhook("manual-sync")
+    return {
+        "status": "synced",
+        "alerts_upserted": count,
+        "state_webhook_fired": fired,
+    }

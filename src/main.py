@@ -167,10 +167,49 @@ def _build_app() -> FastAPI:
                 closed_days = processor.settings.incident_retention_closed_days
                 if open_days > 0 or closed_days > 0:
                     await incident_store.cleanup(open_days, closed_days)
+                # The sync may have changed aggregate state (e.g. an alert was
+                # closed in JSM while we were down). State webhooks are
+                # edge-triggered on incoming events, so re-fire explicitly or a
+                # status light stays stale until the next unrelated alert.
+                await processor.reconcile_state_webhook("scheduled-sync")
             except Exception as exc:
                 logger.error("Incident sync failed: %s", exc)
             interval = max(60, processor.settings.incident_sync_interval_minutes * 60)
             await asyncio.sleep(interval)
+
+    async def _startup_reconcile() -> None:
+        """
+        Pull current alerts from JSM, then re-fire the matching state webhook.
+
+        Runs once, shortly after boot. Covers the case where the service was
+        offline while an alert was created, acknowledged or closed: those
+        webhooks were never delivered, so the local store and any downstream
+        indicator are stale until this corrects them.
+
+        JSM is treated as authoritative — the store is refreshed from the API
+        first, then the webhook is fired from the resulting counts.
+        """
+        if not incident_store:
+            return
+        # Brief settle so the HTTP clients and store are fully ready.
+        await asyncio.sleep(2)
+        try:
+            alerts = await jsm_client.list_open_alerts()
+            if alerts:
+                count = await incident_store.bulk_upsert(alerts)
+                logger.info("Startup sync: refreshed %d alert(s) from JSM", count)
+            else:
+                logger.info(
+                    "Startup sync: JSM returned no alerts — reconciling from "
+                    "the local store only"
+                )
+            fired = await processor.reconcile_state_webhook("startup")
+            if fired is None:
+                logger.info(
+                    "Startup reconcile: no state webhook configured, nothing sent"
+                )
+        except Exception as exc:
+            logger.error("Startup state reconcile failed: %s", exc)
 
     async def _credential_check_loop() -> None:
         """
@@ -253,6 +292,14 @@ def _build_app() -> FastAPI:
             if incident_store and settings.incident_sync_interval_minutes > 0
             else None
         )
+        # Reconcile once at startup, independent of the periodic sync — which
+        # is disabled by default and, when enabled, waits a minute before its
+        # first run. Anything that changed while the service was down was never
+        # delivered as a webhook, so without this the state webhooks stay stale
+        # until the next unrelated alert arrives.
+        startup_task = (
+            asyncio.create_task(_startup_reconcile()) if incident_store else None
+        )
         try:
             yield
         finally:
@@ -263,6 +310,10 @@ def _build_app() -> FastAPI:
                 sync_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await sync_task
+            if startup_task:
+                startup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await startup_task
             # Close persistent HTTP clients and stores.
             await jsm_client.aclose()
             await ha_client.aclose()

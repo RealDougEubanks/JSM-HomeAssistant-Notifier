@@ -181,6 +181,13 @@ Each value accepts a comma-separated list to fan out to several automations.
 | `INCIDENT_DASHBOARD_ENABLED` | No | `false` | Enable the SQLite incident tracker and `/incidents` API | `src/main.py` |
 | `INCIDENT_DB_PATH` | No | `/tmp/incidents.db` | SQLite database file path | `src/incident_store.py` |
 | `INCIDENT_SYNC_INTERVAL_MINUTES` | No | `0` (webhook-only) | How often to reconcile open alerts from the JSM API | `src/main.py` |
+
+> **State is reconciled at startup regardless of this setting.** Every state
+> webhook is edge-triggered — it fires only when an alert event arrives. Anything
+> that changed while the service was down was never delivered, so on boot the
+> store is refreshed from JSM and the matching state webhook is re-fired. Setting
+> a sync interval additionally re-checks on a schedule, which catches drift while
+> the service is *up* (a webhook that never arrived, say).
 | `INCIDENT_RETENTION_OPEN_DAYS` | No | `0` (never purge) | Delete open incidents older than N days | `src/incident_store.py` |
 | `INCIDENT_RETENTION_CLOSED_DAYS` | No | `0` (never purge) | Delete closed incidents older than N days | `src/incident_store.py` |
 
