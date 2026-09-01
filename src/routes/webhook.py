@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -123,10 +124,21 @@ async def receive_alert(
 
     always_notify = mode == "always"
 
+    # The model normalises action-name aliases, so log the raw value too when it
+    # differed — otherwise a rename upstream is invisible in the logs.
+    raw_action = ""
+    try:
+        raw = json.loads(body).get("action")
+        if isinstance(raw, str) and raw.strip() != payload.action:
+            raw_action = f" (raw={raw.strip()!r})"
+    except Exception:  # noqa: BLE001 - logging aid only, never fatal
+        pass
+
     logger.info(
-        "Incoming webhook — alert_id=%s action=%s priority=%s message=%r mode=%s",
+        "Incoming webhook — alert_id=%s action=%s%s priority=%s message=%r mode=%s",
         payload.alert.alertId,
         payload.action,
+        raw_action,
         payload.alert.priority,
         payload.alert.message,
         "always" if always_notify else "oncall-check",
