@@ -22,7 +22,7 @@ jobs:
       HAS_DOCKERHUB: ${{ vars.DOCKERHUB_USERNAME != '' }}
 
     permissions:
-      contents: read
+      contents: write       # needed for gh release create
       packages: write
       security-events: write   # For uploading Trivy SARIF results
       id-token: write          # For cosign keyless signing and SLSA provenance
@@ -244,6 +244,47 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.DOCKERHUB_IMAGE }}
           short-description: ${{ github.event.repository.description }}
+
+      # ── GitHub Release ───────────────────────────────────────────────────
+      # Only runs on tag pushes (not branch builds).
+      # Extracts the matching section from CHANGELOG.md for the release body.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_IMAGE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}
+        run: |
+          version="${TAG#v}"
+
+          # Extract the CHANGELOG section for this version.
+          body=$(awk "
+            /^## \[${version}\]/ { found=1; next }
+            found && /^## \[/    { exit }
+            found                { print }
+          " CHANGELOG.md)
+
+          # Append container image info.
+          body="${body}
+
+          ---
+          **Docker image**
+          \`\`\`bash
+          docker pull ghcr.io/${GHCR_IMAGE}:${TAG}
+          \`\`\`
+          Digest: \`${DIGEST}\`
+          Signed with cosign (Sigstore keyless). Verify:
+          \`\`\`bash
+          cosign verify ghcr.io/${GHCR_IMAGE}@${DIGEST} \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp github.com/${{ github.repository }}
+          \`\`\`"
+
+          gh release create "${TAG}" \
+            --title "Release ${TAG}" \
+            --notes "${body}" \
+            --verify-tag
 
       # ── Summary ─────────────────────────────────────────────────────────
       - name: Job summary
