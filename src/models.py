@@ -11,7 +11,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# ── Action name aliases ───────────────────────────────────────────────────
+# The escalation action has two spellings in the wild. JSM's integration
+# configuration calls it "EscalateToNext" (the actionMappingType returned by
+# /v1/integrations/{id}/actions), while OpsGenie's webhook documentation — which
+# this payload format descends from — calls it "EscalateNext".
+#
+# Which one arrives in the payload is not something we can rely on, so accept
+# both and normalise to a single canonical value. Matching only one spelling
+# silently drops escalations: the action falls through every lookup, so no TTS
+# is played, no escalate webhook fires, and the alert is stored as plain "open".
+#
+# Keyed by the alias, valued by the canonical form used throughout the codebase.
+_ACTION_ALIASES: dict[str, str] = {
+    "EscalateToNext": "EscalateNext",
+}
 
 
 class AlertSource(BaseModel):
@@ -58,16 +74,30 @@ class JSMWebhookPayload(BaseModel):
     Relevant action values:
       Create            – new alert
       EscalateNext      – alert escalated to the next responder
-      Acknowledge       – alert acknowledged (we ignore this)
-      Close             – alert closed (we ignore this)
-      AddNote           – note added (we ignore this)
-      UnAcknowledge     – un-acknowledged (we ignore this)
-      AssignOwnership   – ownership changed (we ignore this)
+                          (also accepted as "EscalateToNext"; see
+                          ``_ACTION_ALIASES`` above)
+      Acknowledge       – alert acknowledged
+      UnAcknowledge     – un-acknowledged
+      Close             – alert closed
+      AddNote           – note added
+      AssignOwnership   – ownership changed
+
+    ``action`` is normalised on the way in, so downstream code only ever needs
+    to match the canonical spelling.
     """
 
     model_config = ConfigDict(extra="allow")
 
     action: str
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalise_action(cls, v: Any) -> Any:
+        """Fold known action-name aliases onto their canonical spelling."""
+        if isinstance(v, str):
+            return _ACTION_ALIASES.get(v.strip(), v.strip())
+        return v
+
     alert: AlertDetails
     source: AlertSource | None = None
     # Who this notification was sent to (populated for escalation actions)

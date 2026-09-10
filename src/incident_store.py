@@ -127,11 +127,23 @@ class IncidentStore:
         )
 
         # Determine status from action.
-        status = "open"
+        #
+        # Only actions that genuinely describe a lifecycle transition may set
+        # status. Anything else — a note, a tag, a priority or description edit
+        # — leaves it alone by passing NULL, which the ON CONFLICT clause below
+        # coalesces back to the stored value.
+        #
+        # Defaulting unknown actions to "open" was a live footgun: enabling an
+        # innocuous webhook action such as "Alert description is updated" would
+        # resurrect closed alerts and flip acknowledged ones back to unacked,
+        # driving any status light red for incidents that were already resolved.
+        status: str | None = None
         ack_at = None
         closed_at = None
 
-        if action in ("Acknowledge",):
+        if action in ("Create", "UnAcknowledge"):
+            status = "open"
+        elif action in ("Acknowledge",):
             status = "acknowledged"
             ack_at = now
         elif action in ("Close",):
@@ -139,6 +151,16 @@ class IncidentStore:
             closed_at = now
         elif action in ("EscalateNext",):
             status = "escalated"
+
+        if status is None:
+            # Non-lifecycle action: keep whatever status the incident already
+            # has. A brand-new incident first seen via such an action is
+            # genuinely open. The column is NOT NULL, so resolve this here
+            # rather than relying on the ON CONFLICT clause.
+            prior = conn.execute(
+                "SELECT status FROM incidents WHERE alert_id = ?", (alert_id,)
+            ).fetchone()
+            status = prior["status"] if prior else "open"
 
         conn.execute(
             """

@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Escalation webhooks never fired.** JSM's integration configuration names the
+  escalation action `EscalateToNext`, while the OpsGenie webhook format this
+  payload descends from calls it `EscalateNext`. Only the latter was matched, so
+  an escalation arriving under the other spelling fell through every lookup:
+
+  | Consequence | Effect |
+  |---|---|
+  | Not in `_NOTIFY_ACTIONS` | treated as an ignored action — **no TTS announcement** |
+  | Not in `_EVENT_WEBHOOK_MAP` | `HA_WEBHOOK_ON_ESCALATE` was dead config |
+  | Not in `_STATE_ACTIONS` | status light never reflected the escalation |
+  | Unrecognised by the store | stored as plain `open` rather than `escalated` |
+
+  Rather than swap one spelling for the other — the payload's spelling could not
+  be confirmed from any observed traffic — both are now accepted and normalised
+  to a single canonical value in `JSMWebhookPayload`. The inbound log line shows
+  the raw value when it differed, so a future rename upstream is visible instead
+  of silent.
+
+- **An unrecognised action could resurrect a closed incident.** The store
+  defaulted any unknown action to status `open` and wrote it unconditionally, so
+  enabling an innocuous JSM webhook action — `Alert description is updated`, say
+  — reopened closed incidents and flipped acknowledged ones back to unacked,
+  driving a status light red for already-resolved work.
+
+  Only genuine lifecycle transitions (`Create`, `Acknowledge`, `UnAcknowledge`,
+  `Close`, `EscalateNext`) may now set status. Everything else preserves the
+  stored value while still updating the other fields. An incident first seen via
+  a non-lifecycle action is still recorded as `open`.
+
 ## [3.2.0] — 2026-08-27
 
 ### Fixed
