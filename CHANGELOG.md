@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-09-09
+
 ### Fixed
 
 - **Escalation webhooks never fired.** JSM's integration configuration names the
@@ -35,7 +37,7 @@ All notable changes to this project will be documented in this file.
   stored value while still updating the other fields. An incident first seen via
   a non-lifecycle action is still recorded as `open`.
 
-## [3.2.0] — 2026-08-27
+## [3.2.0] — 2026-08-26
 
 ### Fixed
 
