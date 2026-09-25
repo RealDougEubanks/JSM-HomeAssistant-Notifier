@@ -235,15 +235,20 @@ jobs:
           category: grype
         continue-on-error: true
 
-      # ── Docker Hub README sync ───────────────────────────────────────────
-      - name: Update Docker Hub repository description
-        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
-        if: env.HAS_DOCKERHUB == 'true'
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ env.DOCKERHUB_IMAGE }}
-          short-description: ${{ github.event.repository.description }}
+      # ── Docker Hub README sync — removed deliberately ────────────────────
+      #
+      # peter-evans/dockerhub-description PATCHes the repository endpoint, and
+      # Docker Hub rejects that for a repo:write token — verified on solarham
+      # run 36191394041, where login and the image push both succeeded and only
+      # this step returned "Forbidden". It needs repo:admin.
+      #
+      # repo:admin means Read, Write AND DELETE on every image repository in
+      # the account, because Docker Hub has no per-repository scoping for
+      # individual accounts. Granting CI the ability to destroy published
+      # images so a README stays in sync is the wrong trade.
+      #
+      # Update the Docker Hub page by hand, or locally with an admin token that
+      # never enters CI.
 
       # ── GitHub Release ───────────────────────────────────────────────────
       # Only runs on tag pushes (not branch builds).
