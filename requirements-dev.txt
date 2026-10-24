@@ -1,7 +1,7 @@
 # Development / CI dependencies (not included in the Docker image)
 -r requirements.txt
 
-pytest>=9.1.0
+pytest>=9.1.1
 pytest-asyncio>=1.4.0
 pytest-cov>=7.1.0
 respx>=0.23.0        # Mock httpx requests in tests
