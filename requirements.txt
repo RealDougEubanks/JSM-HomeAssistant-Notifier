@@ -1,5 +1,5 @@
 # Runtime dependencies
-fastapi>=0.141.0
+fastapi>=0.141.1
 uvicorn[standard]>=0.52.0
 httpx>=0.28.0
 pydantic>=2.13.0
